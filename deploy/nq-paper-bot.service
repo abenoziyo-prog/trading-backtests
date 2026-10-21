@@ -1,0 +1,23 @@
+# systemd unit for the NQ paper bot (Linux server, e.g. Oracle Cloud Always Free VM).
+#   sudo cp deploy/nq-paper-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nq-paper-bot
+#   journalctl -u nq-paper-bot -f          # live log
+[Unit]
+Description=NQ paper bot (Schwab data only, simulated fills, alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading-backtests
+EnvironmentFile=/home/ubuntu/trading-backtests/deploy/nq_paper_bot.env
+ExecStart=/home/ubuntu/trading-backtests/.venv/bin/python bots/nq_paper_bot.py
+Restart=always
+RestartSec=10
+# hardening: the bot only needs to write its state directory
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/trading-backtests/state
+
+[Install]
+WantedBy=multi-user.target

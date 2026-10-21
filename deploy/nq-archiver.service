@@ -1,0 +1,10 @@
+[Unit]
+Description=Schwab 1-minute archiver (/NQ, QQQ), read-only
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading-backtests
+EnvironmentFile=/home/ubuntu/trading-backtests/deploy/nq_paper_bot.env
+ExecStart=/home/ubuntu/trading-backtests/.venv/bin/python bots/schwab_archiver.py

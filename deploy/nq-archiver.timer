@@ -1,0 +1,12 @@
+# systemd timer for the Schwab archiver on a Linux server (pairs with nq-archiver.service).
+#   sudo cp deploy/nq-archiver.service deploy/nq-archiver.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nq-archiver.timer
+[Unit]
+Description=Daily Schwab 1-minute archiver (/NQ, QQQ)
+
+[Timer]
+OnCalendar=Mon..Sat 18:30 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

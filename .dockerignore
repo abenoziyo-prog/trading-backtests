@@ -1,0 +1,10 @@
+# never send data, results, secrets or local state into the image build
+.venv/
+data/
+reports/
+state/
+.env
+deploy/nq_paper_bot.env
+**/__pycache__/
+.pytest_cache/
+*.egg-info/

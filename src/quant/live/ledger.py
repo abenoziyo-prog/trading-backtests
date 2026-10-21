@@ -1,4 +1,5 @@
-"""Paper ledger: every trade (taken and skipped) and a daily summary, as CSV under <dir>/ledger/."""
+"""Paper ledger under <dir>/ledger/: every trade (taken and skipped), a daily summary, and one file per session of
+executed trades (<year>/trades_MMDD.csv)."""
 from __future__ import annotations
 
 import csv
@@ -9,6 +10,9 @@ from .engine import DayEngine
 TRADE_FIELDS = ["day", "strategy", "side", "taken", "skip_reason", "signal_time", "entry_time", "entry", "stop", "target",
                 "exit_time", "exit", "exit_reason", "pnl_pts", "pnl_usd", "r_multiple"]
 DAY_FIELDS = ["day", "trades_taken", "wins", "losses", "net_pnl_usd", "cum_pnl_usd", "signals_skipped", "levels"]
+# per-session file of executed trades (times ET; P&L for 1 NQ contract at $20/pt incl. the 1 pt round-trip cost)
+DAY_FILE_FIELDS = ["date", "strategy", "side", "contracts", "entry_time", "entry_price", "stop", "target", "exit_time",
+                   "exit_price", "exit_reason", "pnl_points", "pnl_usd", "r_multiple"]
 
 
 class Ledger:
@@ -48,4 +52,27 @@ class Ledger:
                    net_pnl_usd=round(net, 2), cum_pnl_usd=round(self.cum_pnl() + net, 2),
                    signals_skipped=sum(not t.taken for t in trades), levels=levels_note)
         self._append(self.days_path, DAY_FIELDS, [row])
+        self.write_day_file(eng)
         return row
+
+    def write_day_file(self, eng: DayEngine) -> Path:
+        """Executed trades of one session: ledger/<year>/trades_MMDD.csv (entry, exit, P&L), last row = TOTAL.
+        Written every session, also when nothing traded; rewritten if the day is closed again."""
+        day = eng.day.date()
+        taken = sorted((t for t in eng.trades if t.taken and t.exit is not None), key=lambda t: t.entry_time)
+        path = self.dir / str(day.year) / f"trades_{day:%m%d}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=DAY_FILE_FIELDS)
+            w.writeheader()
+            for t in taken:
+                w.writerow(dict(date=day.isoformat(), strategy=t.strategy, side="LONG" if t.side == 1 else "SHORT", contracts=1,
+                                entry_time=f"{t.entry_time:%H:%M}", entry_price=t.entry, stop=t.stop,
+                                target="" if t.target is None else round(t.target, 2), exit_time=f"{t.exit_time:%H:%M}",
+                                exit_price=round(t.exit, 2), exit_reason=t.exit_reason, pnl_points=round(t.pnl_pts, 2),
+                                pnl_usd=round(t.pnl_usd, 2), r_multiple=round(t.r_multiple, 2)))
+            net = sum(t.pnl_usd for t in taken)
+            w.writerow(dict(date=day.isoformat(), strategy="TOTAL", side=f"{len(taken)} trades",
+                            exit_reason=f"{sum(t.pnl_usd > 0 for t in taken)}W / {sum(t.pnl_usd <= 0 for t in taken)}L",
+                            pnl_points=round(sum(t.pnl_pts for t in taken), 2), pnl_usd=round(net, 2)))
+        return path

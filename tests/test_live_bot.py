@@ -367,3 +367,23 @@ def test_cloud_db_url_from_northflank_link():
     assert cr.db_url({"NF_NQBOT_DB_POSTGRES_URI": "postgresql://in", "NF_NQBOT_DB_EXTERNAL_POSTGRES_URI": "postgresql://out"}) == "postgresql://in"
     assert cr.db_url({"STATE_DB_URL": "sqlite:///x", "POSTGRES_URI": "postgresql://in"}) == "sqlite:///x"
     assert cr.db_url({"JDBC_POSTGRES_URI": "jdbc:x"}) is None
+
+
+def test_daily_trades_file(tmp_path):
+    from quant.live.ledger import Ledger
+    lv = DayLevels(105, 95, 100)
+    eng, _ = run(lv, [bar("09:30", 104, 104.5, 103, 103.2), bar("09:31", 103.2, 103.3, 101, 101.5),
+                      bar("09:32", 101.5, 101.6, 99.8, 100.2)])          # GF-1 short 103.2 -> target 100
+    led = Ledger(tmp_path)
+    led.close_day(eng, "test")
+    rows = list(__import__("csv").DictReader((tmp_path / "ledger/2026/trades_0302.csv").open()))
+    assert [r["strategy"] for r in rows] == ["GF-1", "TOTAL"]
+    t = rows[0]
+    assert (t["side"], t["entry_time"], t["exit_time"], t["exit_reason"]) == ("SHORT", "09:31", "09:33", "target")
+    assert float(t["entry_price"]) == 103.2 and float(t["exit_price"]) == 100.0
+    assert float(t["pnl_points"]) == pytest.approx(2.2) and float(t["pnl_usd"]) == pytest.approx(44.0)
+    assert rows[1]["pnl_usd"] == "44.0" and rows[1]["side"] == "1 trades" and rows[1]["exit_reason"] == "1W / 0L"
+    quiet, _ = run(DayLevels(105, 95, 100), [bar("09:30", 99, 99.5, 98.8, 99.2)])
+    led.write_day_file(quiet)                                            # no trades: file still written, TOTAL 0
+    rows = list(__import__("csv").DictReader((tmp_path / "ledger/2026/trades_0302.csv").open()))
+    assert [r["strategy"] for r in rows] == ["TOTAL"] and rows[0]["pnl_usd"] == "0"

@@ -360,3 +360,10 @@ def test_dockerignore_keeps_secrets_and_data_out():
     ignored = (ROOT / ".dockerignore").read_text().split()
     for p in ("data/", "state/", ".env", "deploy/nq_paper_bot.env", "reports/"):
         assert p in ignored
+
+
+def test_cloud_db_url_from_northflank_link():
+    cr = _runner()
+    assert cr.db_url({"NF_NQBOT_DB_POSTGRES_URI": "postgresql://in", "NF_NQBOT_DB_EXTERNAL_POSTGRES_URI": "postgresql://out"}) == "postgresql://in"
+    assert cr.db_url({"STATE_DB_URL": "sqlite:///x", "POSTGRES_URI": "postgresql://in"}) == "sqlite:///x"
+    assert cr.db_url({"JDBC_POSTGRES_URI": "jdbc:x"}) is None

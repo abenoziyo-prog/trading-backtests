@@ -45,7 +45,7 @@ Add these variables:
 | `NQBOT_SYMBOL` | `/NQ` |
 | `SCHWAB_TOKEN_JSON` | the whole contents of `state/nqbot/schwab_token.json` from the Mac (used once, on the first start) |
 
-Then, in the same secret group, **link the PostgreSQL add-on** so its connection string is injected (`POSTGRES_URI`). The runner uses it automatically.
+Then, in the same secret group, **link the PostgreSQL add-on** and tick **`POSTGRES_URI`**, not the 🌐 `EXTERNAL_…` one. Northflank injects it as `NF_<ADDON>_POSTGRES_URI`, for example `NF_NQBOT_DB_POSTGRES_URI`, and the runner picks it up automatically.
 
 To print the token file for copying (it's sensitive, so paste it only into Northflank):
 ```bash

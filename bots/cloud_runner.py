@@ -11,7 +11,7 @@ sandbox). Keeps the bot's files in a database instead of a volume.
   5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ and QQQ 1-minute history), then save
   6. on SIGTERM (redeploy/stop): stop the bot, final save, exit
 Database: STATE_DB_URL = postgresql://... or sqlite:///path (local testing); if unset, POSTGRES_URI / DATABASE_URL
-(as injected by a linked Northflank PostgreSQL add-on) is used.
+(as injected by a linked Northflank PostgreSQL add-on, e.g. NF_NQBOT_DB_POSTGRES_URI) is used.
 One table, nqbot_files(path, sha256, data, updated). Read-only towards Schwab: this file has no Schwab calls.
 """
 from __future__ import annotations
@@ -98,6 +98,15 @@ class StateSync:
         return n
 
 
+def db_url(env) -> str | None:
+    """STATE_DB_URL, else a linked Northflank add-on's internal connection string (POSTGRES_URI, or the
+    prefixed NF_<ADDON>_POSTGRES_URI), else DATABASE_URL. Public (EXTERNAL_*) and JDBC variants are never used."""
+    if env.get("STATE_DB_URL"):
+        return env["STATE_DB_URL"]
+    keys = sorted(k for k in env if k.endswith("POSTGRES_URI") and "EXTERNAL" not in k and "JDBC" not in k and env[k])
+    return env[keys[0]] if keys else env.get("DATABASE_URL") or None
+
+
 def archive_due(now: datetime, last_day: str | None) -> bool:
     return now.weekday() < 6 and (now.hour, now.minute) >= (18, 30) and last_day != now.date().isoformat()
 
@@ -107,7 +116,7 @@ def main() -> None:
     env = os.environ
     state = Path(env.setdefault("NQBOT_STATE_DIR", str(ROOT / "state" / "nqbot")))
     env.setdefault("SCHWAB_TOKEN_PATH", str(state / "schwab_token.json"))
-    url = next((env[k] for k in ("STATE_DB_URL", "POSTGRES_URI", "DATABASE_URL", "POSTGRES_URI_ADMIN") if env.get(k)), None)
+    url = db_url(env)
     if not url:
         sys.exit("no database: set STATE_DB_URL (or link the PostgreSQL add-on, which provides POSTGRES_URI)")
     sync = StateSync(FileStore(url))

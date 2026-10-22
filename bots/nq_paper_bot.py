@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from quant.live.alerts import Alerter  # noqa: E402
 from quant.live.calendar import Calendar  # noqa: E402
-from quant.live.engine import Bar, DayEngine  # noqa: E402
+from quant.live.engine import LIVE_EXITS, Bar, DayEngine  # noqa: E402
 from quant.live.ledger import Ledger  # noqa: E402
 from quant.live.store import BarStore  # noqa: E402
 
@@ -83,7 +83,7 @@ class Bot:
                 self.alerter.send(f"NQ bot: NO TRADING {d}", f"Levels unavailable: {note}. "
                                   "Write state/seed_levels.json (date, pdh, pdl, pdc) to trade today.", "high")
             return
-        self.engine = DayEngine(t.replace(hour=0, minute=0, second=0, microsecond=0), lv)
+        self.engine = DayEngine(t.replace(hour=0, minute=0, second=0, microsecond=0), lv, exits=LIVE_EXITS)
         lh = "n/a" if lv.london_high is None else f"{lv.london_high:,.2f}"
         self.alerter.send(f"NQ bot ready {d}", f"PDH {lv.pdh:,.2f}  PDL {lv.pdl:,.2f}  PDC {lv.pdc:,.2f}  London high {lh}\n{note}", "low")
         self.catch_up(d, t)

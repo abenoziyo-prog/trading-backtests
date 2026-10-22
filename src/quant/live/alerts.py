@@ -39,6 +39,11 @@ def describe(ev: Event, symbol: str) -> tuple[str, str, str]:
         return (f"{t.strategy}: EXIT {side} {fmt_px(t.exit)} ({t.exit_reason})",
                 f"Close the {side.lower()} now. Paper P&L {'+' if pnl >= 0 else '−'}${abs(pnl):,.0f} "
                 f"({t.pnl_pts:+.2f} pts incl. 1 pt cost, ${DPP:.0f}/pt)", "high")
+    if ev.kind == "stop":
+        be = t.policy is not None and abs(t.stop - (t.entry + t.side * t.policy.be_offset_pts)) < 1e-9
+        why = "breakeven" if be else "trailing"
+        return (f"{t.strategy}: move stop to {fmt_px(t.stop)}",
+                f"{side} from {fmt_px(t.entry)}: {why} stop {ev.text} -> {fmt_px(t.stop)} at {ev.time:%H:%M} ET", "default")
     if ev.kind == "skip":
         return (f"{t.strategy}: skipped (position open)", f"Signal at {t.entry_time:%H:%M} ET not taken", "low")
     return (ev.text or ev.kind, ev.text, "default")

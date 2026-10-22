@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import numpy as np
 import pandas as pd
 
-from .engine import Bar, DayEngine, DayLevels, Event
+from .engine import Bar, DayEngine, DayLevels, Event, ExitPolicy
 
 
 def levels_from_row(r: pd.Series) -> DayLevels:
@@ -20,7 +20,8 @@ def bars_of(day_min: pd.DataFrame) -> Iterator[Bar]:
         yield Bar(t.to_pydatetime(), float(o), float(h), float(l), float(c))
 
 
-def replay(rth: pd.DataFrame, levels: pd.DataFrame, min_bars: int = 200) -> Iterator[tuple[DayEngine, list[Event]]]:
+def replay(rth: pd.DataFrame, levels: pd.DataFrame, min_bars: int = 200,
+           exits: dict[str, ExitPolicy] | None = None) -> Iterator[tuple[DayEngine, list[Event]]]:
     """rth: 1-minute US-session bars (tz-aware NY index); levels: daily PDH/PDL/PDC/london_high indexed by day.
     Days with fewer than `min_bars` bars or no previous range are skipped (as in the backtests)."""
     by_day = {d: g for d, g in rth.groupby(rth.index.tz_localize(None).normalize())}
@@ -28,7 +29,7 @@ def replay(rth: pd.DataFrame, levels: pd.DataFrame, min_bars: int = 200) -> Iter
         dm = by_day.get(day)
         if dm is None or len(dm) < min_bars or not (r.PDH - r.PDL) > 0:
             continue
-        eng = DayEngine(dm.index[0].to_pydatetime().replace(hour=0, minute=0), levels_from_row(r))
+        eng = DayEngine(dm.index[0].to_pydatetime().replace(hour=0, minute=0), levels_from_row(r), exits=exits or {})
         ev: list[Event] = []
         for b in bars_of(dm):
             ev += eng.on_bar(b)

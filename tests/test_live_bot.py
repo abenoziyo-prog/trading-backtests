@@ -387,3 +387,57 @@ def test_daily_trades_file(tmp_path):
     led.write_day_file(quiet)                                            # no trades: file still written, TOTAL 0
     rows = list(__import__("csv").DictReader((tmp_path / "ledger/2026/trades_0302.csv").open()))
     assert [r["strategy"] for r in rows] == ["TOTAL"] and rows[0]["pnl_usd"] == "0"
+
+
+def _trade(side=1, entry=100.0, stop=90.0, target=None, policy=None):
+    from quant.live.engine import Trade
+    t = Trade("S3", side, DAY.replace(hour=10), entry, stop, target, DAY.replace(hour=10))
+    t.attach(policy)
+    return t
+
+
+def test_exit_policy_cap_breakeven_trail_time():
+    from quant.live.engine import ExitPolicy
+    t = _trade(policy=ExitPolicy(max_loss_pts=5))
+    assert t.stop == 95 and t.risk0 == 10                       # stop capped at 5 pts; R stays on the original 10
+    assert t.check(bar("10:00", 100, 101, 94.5, 95)) and t.exit == 95 and t.exit_reason == "stop"
+    assert t.r_multiple == pytest.approx((95 - 100 - 1) / 10)
+    t = _trade(policy=ExitPolicy(be_trigger_pts=3))
+    assert not t.check(bar("10:00", 100, 103.5, 99, 103))      # +3.5 reached: stop moves to entry + 1 for the NEXT bar
+    assert t.stop == 101
+    assert t.check(bar("10:01", 103, 103, 100.5, 101)) and t.exit == 101 and t.exit_reason == "dynamic stop"
+    t = _trade(policy=ExitPolicy(be_trigger_pts=2, trail_pts=3))
+    t.check(bar("10:00", 100, 108, 100, 107))                  # best 108 -> stop max(101, 105)
+    assert t.stop == 105
+    t.check(bar("10:01", 107, 106, 105.5, 106))                 # no new high: stop stays 105, not hit
+    assert t.exit is None and t.stop == 105
+    t = _trade(side=-1, entry=100, stop=110, policy=ExitPolicy(time_stop_min=2))
+    assert not t.check(bar("10:00", 100, 101, 99, 100.5))      # 1 minute in, losing: keep
+    assert t.check(bar("10:01", 100.5, 101, 100, 100.25))      # 2 minutes in, not in profit -> exit at close
+    assert t.exit == 100.25 and t.exit_reason == "time stop"
+    t = _trade(side=-1, entry=100, stop=110, policy=ExitPolicy(time_stop_min=1))
+    assert not t.check(bar("10:00", 100, 100.5, 98, 99))       # in profit at the time limit: keeps running
+
+
+def test_exit_policy_never_loosens_and_stop_first():
+    from quant.live.engine import ExitPolicy
+    t = _trade(stop=97, policy=ExitPolicy(max_loss_pts=5, trail_pts=10))
+    assert t.stop == 97                                         # cap only tightens; trail 10 behind would be looser
+    t.check(bar("10:00", 100, 100.5, 99, 100))
+    assert t.stop == 97
+    t = _trade(target=102, policy=ExitPolicy(be_trigger_pts=1))
+    assert t.check(bar("10:00", 100, 103, 89, 101)) and t.exit_reason == "stop"   # stop and target same bar: stop
+
+
+def test_live_l2_exit_reports_stop_moves():
+    from quant.live.engine import LIVE_EXITS
+    lv = DayLevels(pdh=100, pdl=0, pdc=99)                        # R = 100: L2's own stop would be 25 below entry
+    bars = [bar(f"09:{30 + i:02d}", 99, 99.5, 98.8, 99.2) for i in range(9)] + [bar("09:39", 99.2, 100.6, 99.1, 100.5)]
+    bars += [bar("09:40", 100.5, 180, 100.2, 179), bar("09:41", 179, 200, 170, 199), bar("09:42", 199, 199, 140, 150)]
+    eng = DayEngine(DAY, lv, exits=LIVE_EXITS)
+    moves = []                                                     # alerts are formatted as each event happens
+    for b in bars:
+        moves += [describe(e, "/NQ")[0] for e in eng.on_bar(b) if e.kind == "stop"]
+    l2 = [t for t in eng.trades if t.strategy == "L2"][0]
+    assert moves == ["L2: move stop to 130.00", "L2: move stop to 150.00"]  # best 180 -> trail 130; best 200 -> 150
+    assert l2.exit_reason == "dynamic stop" and l2.exit == 150.0   # hit at 09:42

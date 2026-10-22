@@ -49,6 +49,22 @@ class DayLevels:
         return self.pdh - self.pdl
 
 
+@dataclass(frozen=True)
+class ExitPolicy:
+    """Dynamic exit rules on top of a strategy's own stop/target (all optional; None = rule off).
+      max_loss_pts   cap the initial stop distance at this many points (applied at entry)
+      be_trigger_pts once the trade has been this far in profit, move the stop to entry +/- be_offset_pts
+      trail_pts      trail the stop this far behind the best price (from be_trigger_pts if set, else from entry)
+      time_stop_min  after this many minutes, exit at the bar's close if the trade is not in profit
+    Stop moves are decided at a bar's close and apply from the next bar (no intrabar look-ahead)."""
+
+    max_loss_pts: float | None = None
+    be_trigger_pts: float | None = None
+    be_offset_pts: float = 1.0
+    trail_pts: float | None = None
+    time_stop_min: int | None = None
+
+
 @dataclass
 class Trade:
     strategy: str
@@ -63,6 +79,9 @@ class Trade:
     exit_reason: str | None = None
     taken: bool = False
     skip_reason: str = ""
+    policy: ExitPolicy | None = None
+    risk0: float | None = None  # initial risk (entry to the strategy's own stop), for R-multiples
+    best: float | None = None  # best price since entry (for breakeven / trailing)
 
     @property
     def pnl_pts(self) -> float | None:
@@ -74,17 +93,46 @@ class Trade:
 
     @property
     def r_multiple(self) -> float | None:
-        return None if self.exit is None else self.pnl_pts / abs(self.entry - self.stop)
+        return None if self.exit is None else self.pnl_pts / (self.risk0 or abs(self.entry - self.stop))
+
+    def attach(self, policy: ExitPolicy | None) -> None:
+        """Apply exit rules at entry: remember the initial risk, cap the stop distance."""
+        self.risk0 = abs(self.entry - self.stop)
+        self.policy, self.best = policy, self.entry
+        if policy is not None and policy.max_loss_pts is not None and self.risk0 > policy.max_loss_pts:
+            self.stop = self.entry - self.side * policy.max_loss_pts
 
     def check(self, bar: Bar) -> bool:
         """Apply one bar; True when the trade closed on it."""
         stop_hit = bar.low <= self.stop if self.side == 1 else bar.high >= self.stop
         tgt_hit = self.target is not None and (bar.high >= self.target if self.side == 1 else bar.low <= self.target)
         if stop_hit:
-            self._close(bar.t + ONE_MIN, self.stop, "stop")
+            moved = self.policy is not None and self.stop != self._initial_stop()  # breakeven / trailing stop
+            self._close(bar.t + ONE_MIN, self.stop, "dynamic stop" if moved else "stop")
         elif tgt_hit:
             self._close(bar.t + ONE_MIN, self.target, "target")
+        elif self.policy is not None:
+            self._manage(bar)
         return self.exit is not None
+
+    def _initial_stop(self) -> float:
+        p = self.policy
+        risk = self.risk0 if p is None or p.max_loss_pts is None else min(self.risk0, p.max_loss_pts)
+        return self.entry - self.side * risk
+
+    def _manage(self, bar: Bar) -> None:
+        p, s = self.policy, self.side
+        self.best = max(self.best, bar.high) if s == 1 else min(self.best, bar.low)
+        gain = s * (self.best - self.entry)
+        tighter = (lambda new: max(self.stop, new)) if s == 1 else (lambda new: min(self.stop, new))
+        armed = p.be_trigger_pts is None or gain >= p.be_trigger_pts
+        if p.be_trigger_pts is not None and armed:
+            self.stop = tighter(self.entry + s * p.be_offset_pts)
+        if p.trail_pts is not None and armed:
+            self.stop = tighter(self.best - s * p.trail_pts)
+        if p.time_stop_min is not None and (bar.t + ONE_MIN - self.entry_time).total_seconds() >= 60 * p.time_stop_min \
+                and s * (bar.close - self.entry) <= 0:
+            self._close(bar.t + ONE_MIN, bar.close, "time stop")
 
     def _close(self, t: datetime, px: float, why: str) -> None:
         self.exit_time, self.exit, self.exit_reason = t, px, why
@@ -319,6 +367,12 @@ class LevelCross(Strategy):
         return closed
 
 
+# Exit rules the live bot trades with (reports/exit_rules/REPORT.md, enabled 2026-10-22): L2 gets a managed exit
+# (stop capped at 60 pts; at +75 pts the stop moves to entry + 1, then trails 50 pts behind the best price).
+# The other strategies keep their own stops/targets. replay()/research default to no extra rules.
+LIVE_EXITS: dict[str, ExitPolicy] = {"L2": ExitPolicy(max_loss_pts=60, be_trigger_pts=75, trail_pts=50)}
+
+
 def make_strategies(lv: DayLevels, day: datetime) -> list[Strategy]:
     return [GF1(lv, day), ORBC(lv, day),
             LevelCross(lv, day, "S3", lv.london_high, -1, 1, 0.25, 0.25),
@@ -331,6 +385,7 @@ class DayEngine:
 
     day: datetime
     levels: DayLevels
+    exits: dict[str, ExitPolicy] = field(default_factory=dict)  # per strategy name, or "*" for all; empty = off
     strategies: list[Strategy] = field(default_factory=list)
     taken_open: Trade | None = None
     free_at: datetime | None = None
@@ -355,6 +410,7 @@ class DayEngine:
             entered += s.on_bar(bar)
         entered.sort(key=lambda t: (t.entry_time, PRIORITY.index(t.strategy)))
         for t in entered:
+            t.attach(self.exits.get(t.strategy, self.exits.get("*")))
             if self.taken_open is None and (self.free_at is None or t.entry_time >= self.free_at):
                 t.taken = True
                 self.taken_open = t
@@ -362,12 +418,17 @@ class DayEngine:
             else:
                 t.skip_reason = "position open"
                 ev.append(Event("skip", t.entry_time, t))
-        # 2) exits checked on this bar (including trades that entered on it)
+        # 2) exits checked on this bar (including trades that entered on it); a moved stop on the taken trade is
+        #    reported so it can be mirrored by hand
+        o = self.taken_open
+        stop_before = None if o is None else o.stop
         for s in self.strategies:
             for t in s.manage(bar):
                 if t.taken:
                     self.taken_open, self.free_at = None, t.exit_time
                     ev.append(Event("exit", t.exit_time, t))
+        if o is not None and o.exit is None and o.stop != stop_before:
+            ev.append(Event("stop", bar.t + ONE_MIN, o, text=f"{stop_before:.2f}"))
         # 3) signals that became known at this bar's close (entry at the next bar) -> early alert, only for the
         #    one the picker will take (no position open, highest priority); the others get a "skip" next bar
         new = [s.pending for s in self.strategies if s.pending is not None and id(s.pending) not in self._announced]

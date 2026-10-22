@@ -20,6 +20,16 @@
 
 **No seed file or Mac data is needed on the first start.** The bot pulls yesterday's whole US session and today's minutes from Schwab history, and the archiver pulls Schwab's last ~6 weeks of 1-minute bars.
 
+
+## What it trades (24/7)
+| When (ET) | Book | Contracts |
+|---|---|---|
+| 18:00 → 09:29 | **overnight-drift**: long from the night's first bar, stop 0.25 R0, out at 09:29 | 1 |
+| 18:00 → 09:29 | **overnight-tactical**: Tokyo, EU pre-open and London open fades, Asia-low breakout short (one at a time) | 1 |
+| 09:30 → 16:00 | **US**: GF-1, ORB-C, S3, L2 (one at a time; L2 managed exit) | 1 |
+
+At most 2 contracts are open overnight and 1 during the US session. Each session's file `state/nqbot/ledger/<year>/trades_MMDD.csv` lists the night before it and the US session, with a `book` column. Parity checks: `scripts/check_live_engine.py` (US) and `scripts/check_overnight_engine.py` (overnight).
+
 ## Steps
 ### 1. Put the code on GitHub (private repo)
 Northflank builds the container from a Git repository. Secrets and data are excluded by `.gitignore` and `.dockerignore`:

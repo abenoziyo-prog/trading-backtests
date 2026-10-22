@@ -66,7 +66,7 @@ class Alerter:
             title, body, _ = describe(ev, symbol)
             log.info("%s | %s", title, body)
             return
-        if ev.kind == "day_end":
+        if ev.kind in ("day_end", "night_end"):
             return
         self.send(*describe(ev, symbol))
 

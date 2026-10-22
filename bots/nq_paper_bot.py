@@ -30,6 +30,7 @@ from quant.live.alerts import Alerter  # noqa: E402
 from quant.live.calendar import Calendar  # noqa: E402
 from quant.live.engine import LIVE_EXITS, Bar, DayEngine  # noqa: E402
 from quant.live.ledger import Ledger  # noqa: E402
+from quant.live.overnight import NightEngine, NightLevels, night_start  # noqa: E402
 from quant.live.store import BarStore  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
@@ -45,6 +46,8 @@ class Bot:
         self.store, self.ledger = BarStore(state, NY), Ledger(state)
         self.engine: DayEngine | None = None
         self.engine_day: date | None = None
+        self.night: NightEngine | None = None   # overnight books (18:00 -> 09:29 ET)
+        self.night_day: date | None = None
         self.levels_note = ""
         self.no_trade_day: date | None = None
         self.last_bar_wall = time.time()
@@ -54,6 +57,7 @@ class Bot:
         self.last_bar_wall = time.time()
         if not self.store.append(bar):
             return
+        self.on_night_bar(bar)
         d = bar.t.date()
         if not self.cal.is_trading_day(d) or not (9 * 60 + 30 <= bar.mod < 16 * 60):
             return
@@ -111,23 +115,27 @@ class Bot:
         new = [b for b in bars if b.t.isoformat() not in self.store._seen]
         if not new:
             return
-        today = new[-1].t.date()
+        last = new[-1].t
+        cut_day = last.date() if last.hour >= 18 else last.date() - timedelta(days=1)
+        cutoff = datetime(cut_day.year, cut_day.month, cut_day.day, 18, 0, tzinfo=NY)  # start of the current night
         self.quiet = True
         try:
             for b in new:
-                if b.t.date() < today:
-                    self.store.append(b)  # earlier days: record only (they feed future levels, not today's trades)
+                if b.t < cutoff:
+                    self.store.append(b)  # before the current night: record only (they feed levels, not trades)
                 else:
                     self.on_bar(b)
         finally:
             self.quiet = False
         log.info("back-filled %d missed minutes (%s-%s) from Schwab history", len(new), new[0].t.strftime("%m-%d %H:%M"),
                  new[-1].t.strftime("%H:%M"))
-        o = self.engine.taken_open if self.engine is not None else None
-        if o is not None:
+        open_now = [self.engine.taken_open] if self.engine is not None and self.engine.taken_open is not None else []
+        if self.night is not None and not self.night.closed:
+            open_now += [t for t in self.night.trades if t.taken and t.exit is None]
+        for o in open_now:
             tgt = "hold to close" if o.target is None else f"{o.target:,.2f}"
             self.alerter.send(f"NQ bot resumed: {o.strategy} {'LONG' if o.side == 1 else 'SHORT'} open",
-                              f"Entered {o.entry_time:%H:%M} ET at {o.entry:,.2f}. Stop {o.stop:,.2f} | Target {tgt}", "high")
+                              f"Entered {o.entry_time:%m-%d %H:%M} ET at {o.entry:,.2f}. Stop {o.stop:,.2f} | Target {tgt}", "high")
 
     def finish_day(self) -> None:
         if self.engine is None:
@@ -140,8 +148,83 @@ class Bot:
                           f"cumulative ${float(row['cum_pnl_usd']):,.0f}", "low")
         self.engine = None
 
+    # ---------------------------------------------------------- overnight books
+    def night_of(self, t: datetime) -> date | None:
+        """Trading day whose night (previous calendar day 18:00 -> 09:29 ET) contains t, or None."""
+        mod = t.hour * 60 + t.minute
+        if mod >= 18 * 60:
+            d = t.date() + timedelta(days=1)
+            while not self.cal.is_trading_day(d):
+                d += timedelta(days=1)
+        elif mod < 9 * 60 + 30 and self.cal.is_trading_day(t.date()):
+            d = t.date()
+        else:
+            return None
+        return d if night_start(datetime(d.year, d.month, d.day)) <= t else None  # e.g. a Thursday evening before a Friday holiday
+
+    def night_bars(self, d: date, before: datetime) -> list[Bar]:
+        start = night_start(datetime(d.year, d.month, d.day))
+        bars = [b for b in self.store.bars(start.date()) if b.t >= start] + [b for b in self.store.bars(d) if b.mod < 9 * 60 + 30]
+        return [b for b in bars if b.t < before]
+
+    def on_night_bar(self, bar: Bar) -> None:
+        d = self.night_of(bar.t)
+        if d is None:
+            return
+        if self.night_day != d:
+            self.start_night(d, bar.t)
+        if self.night is None or self.night.closed:
+            return
+        for ev in self.night.on_bar(bar):
+            self._emit(ev, bar)
+        if self.night.closed:
+            self.finish_night()
+
+    def start_night(self, d: date, t: datetime) -> None:
+        if self.night is not None and not self.night.closed:
+            self.finish_night()
+        self.night_day = d
+        lv, note = self.store.levels(d, self.cal)
+        if lv is None:
+            self.night = None
+            self.alerter.send(f"NQ bot: NO OVERNIGHT TRADING (night before {d})", f"Levels unavailable: {note}.", "high")
+            return
+        self.night = NightEngine(datetime(d.year, d.month, d.day), NightLevels(lv.pdh, lv.pdl, lv.pdc))
+        self.alerter.send(f"NQ bot night ready (session {d})", f"PDH {lv.pdh:,.2f}  PDL {lv.pdl:,.2f}  PDC {lv.pdc:,.2f}  "
+                          f"R0 {lv.pdh - lv.pdl:,.2f}\nBooks: drift long + tactical (Tokyo/EU/London fades, Asia-low breakout)", "low")
+        earlier = self.night_bars(d, t)
+        for b in earlier:  # restart mid-night: rebuild from saved bars, no alerts
+            self.night.on_bar(b)
+        if earlier:
+            log.info("night catch-up: replayed %d saved bars (%s-%s)", len(earlier), earlier[0].t.strftime("%m-%d %H:%M"),
+                     earlier[-1].t.strftime("%H:%M"))
+            for t_ in (x for x in self.night.trades if x.taken and x.exit is None):
+                if not self.quiet:
+                    self.alerter.send(f"NQ bot restarted: {t_.strategy} {'LONG' if t_.side == 1 else 'SHORT'} still open",
+                                      f"Entered {t_.entry_time:%m-%d %H:%M} ET at {t_.entry:,.2f}. Stop {t_.stop:,.2f}", "high")
+
+    def finish_night(self) -> None:
+        if self.night is None:
+            return
+        for ev in self.night.close():
+            self._emit(ev, None)
+        path = self.ledger.close_night(self.night)
+        taken = [t for t in self.night.trades if t.taken and t.pnl_usd is not None]
+        self.alerter.send(f"NQ bot night summary (session {self.night_day})",
+                          f"{len(taken)} trades, net ${sum(t.pnl_usd for t in taken):,.0f} -> {path.name}", "low")
+
+    def _emit(self, ev, bar: Bar | None) -> None:
+        if self.quiet:
+            log.info("back-fill %s: %s %s", bar.t.strftime("%H:%M") if bar else "", ev.kind, ev.trade.strategy if ev.trade else "")
+        else:
+            self.alerter.event(ev, self.symbol)
+
     def on_clock(self, now: datetime) -> None:
-        """Called every second: flatten at the close (13:00 on early-close days) if bars stopped early."""
+        """Called every second: flatten at the close (13:00 on early-close days) if bars stopped early; end the night
+        at 09:30 if its last bars did not arrive."""
+        if self.night is not None and not self.night.closed and self.night_day == now.date() \
+                and now >= datetime(now.year, now.month, now.day, 9, 30, 15, tzinfo=NY):
+            self.finish_night()
         if self.engine is not None and self.engine_day == now.date():
             close = datetime.combine(now.date(), self.cal.close_time(now.date()), NY)
             if now >= close + timedelta(seconds=15):

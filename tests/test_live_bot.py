@@ -370,23 +370,39 @@ def test_cloud_db_url_from_northflank_link():
 
 
 def test_daily_trades_file(tmp_path):
+    import csv
     from quant.live.ledger import Ledger
     lv = DayLevels(105, 95, 100)
     eng, _ = run(lv, [bar("09:30", 104, 104.5, 103, 103.2), bar("09:31", 103.2, 103.3, 101, 101.5),
                       bar("09:32", 101.5, 101.6, 99.8, 100.2)])          # GF-1 short 103.2 -> target 100
     led = Ledger(tmp_path)
     led.close_day(eng, "test")
-    rows = list(__import__("csv").DictReader((tmp_path / "ledger/2026/trades_0302.csv").open()))
-    assert [r["strategy"] for r in rows] == ["GF-1", "TOTAL"]
+    led.close_day(eng, "test")                                           # closing twice must not duplicate
+    rows = list(csv.DictReader((tmp_path / "ledger/2026/trades_0302.csv").open()))
+    assert [r["strategy"] for r in rows] == ["GF-1", "TOTAL"] and rows[0]["book"] == "US"
     t = rows[0]
     assert (t["side"], t["entry_time"], t["exit_time"], t["exit_reason"]) == ("SHORT", "09:31", "09:33", "target")
     assert float(t["entry_price"]) == 103.2 and float(t["exit_price"]) == 100.0
     assert float(t["pnl_points"]) == pytest.approx(2.2) and float(t["pnl_usd"]) == pytest.approx(44.0)
-    assert rows[1]["pnl_usd"] == "44.0" and rows[1]["side"] == "1 trades" and rows[1]["exit_reason"] == "1W / 0L"
+    assert float(rows[1]["pnl_usd"]) == 44.0 and rows[1]["side"] == "1 trades" and rows[1]["exit_reason"] == "1W / 0L"
+    assert len(list(csv.DictReader((tmp_path / "ledger/daily.csv").open()))) == 1
     quiet, _ = run(DayLevels(105, 95, 100), [bar("09:30", 99, 99.5, 98.8, 99.2)])
-    led.write_day_file(quiet)                                            # no trades: file still written, TOTAL 0
-    rows = list(__import__("csv").DictReader((tmp_path / "ledger/2026/trades_0302.csv").open()))
-    assert [r["strategy"] for r in rows] == ["TOTAL"] and rows[0]["pnl_usd"] == "0"
+    led2 = Ledger(tmp_path / "q")
+    led2.close_day(quiet, "test")                                        # no trades: file still written, TOTAL 0
+    rows = list(csv.DictReader((tmp_path / "q/ledger/2026/trades_0302.csv").open()))
+    assert [r["strategy"] for r in rows] == ["TOTAL"] and float(rows[0]["pnl_usd"]) == 0
+
+
+def test_ledger_migrates_old_trades_csv(tmp_path):
+    import csv
+    from quant.live.ledger import Ledger
+    (tmp_path / "ledger").mkdir()
+    old = "day,strategy,side,taken,skip_reason,signal_time,entry_time,entry,stop,target,exit_time,exit,exit_reason,pnl_pts,pnl_usd,r_multiple\n"
+    old += "2026-10-21,ORB-C,long,True,,t,2026-10-21T10:03:00-04:00,1,0,2,2026-10-21T12:40:00-04:00,2,target,1,20,1\n"
+    (tmp_path / "ledger/trades.csv").write_text(old)
+    Ledger(tmp_path)
+    rows = list(csv.DictReader((tmp_path / "ledger/trades.csv").open()))
+    assert rows[0]["book"] == "US" and rows[0]["strategy"] == "ORB-C"
 
 
 def _trade(side=1, entry=100.0, stop=90.0, target=None, policy=None):
@@ -441,3 +457,31 @@ def test_live_l2_exit_reports_stop_moves():
     l2 = [t for t in eng.trades if t.strategy == "L2"][0]
     assert moves == ["L2: move stop to 130.00", "L2: move stop to 150.00"]  # best 180 -> trail 130; best 200 -> 150
     assert l2.exit_reason == "dynamic stop" and l2.exit == 150.0   # hit at 09:42
+
+
+def test_night_routing_weekends_and_holidays(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("nqbot3", ROOT / "bots/nq_paper_bot.py")
+    nb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nb)
+    bot = nb.Bot(tmp_path, "/NQ", Alerter({}))
+    at = lambda y, m, d, hh, mm: datetime(y, m, d, hh, mm, tzinfo=NY)
+    assert bot.night_of(at(2026, 10, 18, 18, 5)).isoformat() == "2026-10-19"   # Sunday evening -> Monday session
+    assert bot.night_of(at(2026, 10, 21, 3, 0)).isoformat() == "2026-10-21"    # Wednesday 03:00 -> Wednesday
+    assert bot.night_of(at(2026, 10, 21, 12, 0)) is None                       # US session hours
+    assert bot.night_of(at(2026, 11, 25, 20, 0)) is None                       # Wed evening before Thanksgiving: no night
+    assert bot.night_of(at(2026, 11, 26, 18, 30)).isoformat() == "2026-11-27"  # Thanksgiving evening -> Friday session
+
+
+def test_night_engine_books():
+    from quant.live.overnight import NightEngine, NightLevels
+    D = datetime(2026, 10, 21)                                    # night starts 2026-10-20 18:00 ET
+    eng = NightEngine(D, NightLevels(110, 90, 100))               # R0 = 20 -> drift stop 5 pts below entry
+    first = Bar(datetime(2026, 10, 20, 18, 0, tzinfo=NY), 100, 100.5, 99.5, 100)
+    ev = eng.on_bar(first)
+    drift = [t for t in eng.trades if t.strategy == "DRIFT"][0]
+    assert drift.entry == 100 and drift.stop == 95 and drift.taken and ev[0].kind == "entry"
+    eng.on_bar(Bar(datetime(2026, 10, 20, 18, 1, tzinfo=NY), 100, 100, 94, 95))
+    assert drift.exit == 95 and drift.exit_reason == "stop"
+    ev = eng.close()
+    assert ev[-1].kind == "night_end" and eng.closed

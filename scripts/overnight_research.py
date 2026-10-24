@@ -53,9 +53,13 @@ def load_nights() -> list[dict]:
     us_open = rth.open.groupby(rth.index.tz_localize(None).normalize()).first()
     vix = pd.read_parquet(ROOT / "data/free/VIX_daily_cboe.parquet").close
     vix.index = pd.to_datetime(vix.index).normalize()
-    dxy = pd.read_parquet(ROOT / "data/free/DXY_1min_rebuilt.parquet", columns=["close"])
-    dxy = dxy[(dxy.index >= pd.Timestamp("2025-03-25", tz=s.TZ)) & (dxy.index < pd.Timestamp("2026-10-10", tz=s.TZ))].close
-    dxy_t, dxy_v = dxy.index.asi8, dxy.to_numpy()
+    dxy_path = ROOT / "data/free/DXY_1min_rebuilt.parquet"  # optional (not in the CI data snapshot)
+    if dxy_path.exists():
+        dxy = pd.read_parquet(dxy_path, columns=["close"])
+        dxy = dxy[(dxy.index >= pd.Timestamp("2025-03-25", tz=s.TZ)) & (dxy.index < pd.Timestamp("2026-10-10", tz=s.TZ))].close
+        dxy_t, dxy_v = dxy.index.asi8, dxy.to_numpy()
+    else:
+        dxy_t, dxy_v = np.array([], dtype=np.int64), np.array([])
     idx = m.index
     nights = []
     for day, r in lv.iterrows():

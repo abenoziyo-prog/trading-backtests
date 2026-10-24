@@ -13,3 +13,4 @@ reports/
 state/
 deploy/nq_paper_bot.env
 data/schwab/
+lab_results/

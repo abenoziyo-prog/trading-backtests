@@ -1,0 +1,88 @@
+# Strategy lab: test ideas on pull requests and nightly; publish results to the `lab` branch (never to main,
+# so nightly runs don't redeploy the bot). See lab/README.md.
+name: strategy-lab
+
+on:
+  pull_request:
+    paths: ["ideas/**", "lab/**"]
+  schedule:
+    - cron: "30 22 * * 1-5"   # weekdays 22:30 UTC (18:30 ET in summer, 17:30 in winter)
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Re-run every idea (not only new ones)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # publish results to the lab branch
+  pull-requests: write   # comment results on idea pull requests
+
+concurrency:
+  group: strategy-lab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Data snapshot (data branch)
+        run: |
+          git fetch --depth=1 origin data
+          git archive FETCH_HEAD snapshot | tar -x
+          cp -r snapshot/. . && rm -rf snapshot
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install --quiet pandas numpy pyarrow matplotlib pytest
+      - name: Unit tests (lab)
+        run: python -m pytest -q tests/test_lab.py
+      - name: Restore registry from the lab branch
+        run: |
+          mkdir -p lab_results
+          if git fetch --depth=1 origin lab 2>/dev/null; then git archive FETCH_HEAD lab_results | tar -x || true; fi
+      - name: Evaluate changed ideas (pull request)
+        if: github.event_name == 'pull_request'
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD -- 'ideas/*.py' | grep -v '/_' || true)
+          if [ -n "$CHANGED" ]; then python -m lab.harness $CHANGED; else echo "no idea files changed"; fi
+      - name: Evaluate ideas (nightly / manual)
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ "${{ inputs.all }}" = "true" ]; then python -m lab.harness --all; else python -m lab.harness --all --new-only; fi
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f lab_results/leaderboard.md ]; then cat lab_results/leaderboard.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/${{ github.base_ref }}...HEAD -- 'ideas/*.py' | grep -v '/_' || true)
+          for f in $CHANGED; do
+            n=$(basename "$f" .py)
+            name=$(python -c "import importlib.util,sys; s=importlib.util.spec_from_file_location('m','$f'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(getattr(m,'NAME','$n'))")
+            [ -f "lab_results/$name.md" ] && gh pr comment ${{ github.event.pull_request.number }} --body-file "lab_results/$name.md"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lab-results
+          path: lab_results
+      - name: Publish results to the lab branch
+        if: github.event_name != 'pull_request'
+        run: |
+          git config user.name "strategy-lab"
+          git config user.email "strategy-lab@users.noreply.github.com"
+          if git fetch --depth=1 origin lab 2>/dev/null; then git worktree add -B lab-publish ../pub FETCH_HEAD; else git worktree add --orphan -b lab-publish ../pub; fi
+          mkdir -p ../pub/lab_results && cp -r lab_results/. ../pub/lab_results/
+          cd ../pub && git add -A
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "lab: results $(date -u +%F)"
+          git push origin HEAD:lab

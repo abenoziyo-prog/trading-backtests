@@ -25,8 +25,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 def load_script(name: str, file: str):
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / file)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # registered before running: dataclasses (and caching) need it
     spec.loader.exec_module(mod)
     return mod
 

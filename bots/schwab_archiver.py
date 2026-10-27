@@ -5,7 +5,7 @@
 
 Read-only: the only Schwab call is price history (ReadOnlyClient allows nothing else). Schwab keeps about
 6 weeks of 1-minute bars (checked 2026-10-21: earliest 2026-09-10), so running this at least every few weeks
-loses nothing; it is scheduled daily (deploy/com.nqbot.archiver.plist). Each run fetches from the last saved
+loses nothing; bots/cloud_runner.py runs it daily at 18:30 ET. Each run fetches from the last saved
 bar (or --days back on the first run) in chunks under Schwab's 40,000-bar per-request cap, keeps only
 completed minutes, merges, de-duplicates and writes atomically.
 Files: data/schwab/<NQ|QQQ|ES|SPY|VIX|VIX3M|VIX9D|VVIX>_1min.parquet (index: bar start, America/New_York;

@@ -1,12 +1,18 @@
 # trading-backtests
 
-Backtesting, walk-forward (out-of-sample) testing and paper trading for index and US equity strategies.
+Research and paper trading for Nasdaq-100 futures (/NQ), US session and overnight.
 
-- **Data:** free daily bars from Yahoo Finance (via `yfinance`), adjusted for splits and dividends and cached locally in `data/cache/`.
-- **Engine:** vectorized daily backtests with commissions, slippage and a configurable signal delay. Look-ahead is prevented by design.
-- **Metrics:** CAGR, volatility, Sharpe, Sortino, max drawdown, Calmar, exposure, trades.
-- **Walk-forward:** re-optimizes parameters on rolling training windows and trades them on the unseen year that follows.
-- **Bot:** a once-a-day Alpaca rebalancer. It's dry-run and paper by default.
+- **Research:** 1-minute backtests on NSX/NQ data (`scripts/`, shared code in `src/quant/`). Approved rules: US session
+  09:30–16:00 ET with no entries after 15:30, 1 NQ contract at $20/pt, 1 pt round trip, no slippage, a stop and a target
+  in the same minute counts as the stop.
+- **Strategy lab:** pre-registered ideas (`ideas/`) judged by fixed gates (`lab/`, see `lab/README.md`). A GitHub Actions
+  job runs new ideas nightly.
+- **Paper bot:** `bots/nq_paper_bot.py` trades the live books on Schwab market data with simulated fills. It never sends
+  orders. It runs 24/7 on Northflank (`deploy/NORTHFLANK.md`), next to the Schwab archiver, the GEX snapshot and the
+  5-minute option and VIX capture (`bots/cloud_runner.py`). Each session close writes a status report (P&L, live vs
+  backtest, kill-switch distance, shadow book, P&L by GEX, VIX and expected-move state at entry).
+- **Options and volatility research:** `docs/GEX_FRAMEWORK.md` (pre-registered hypotheses), `scripts/vix_strategy_study.py`,
+  `scripts/vix_rule_of_16.py`.
 
 ## Setup
 
@@ -14,35 +20,9 @@ Backtesting, walk-forward (out-of-sample) testing and paper trading for index an
 cd ~/trading-backtests
 /opt/homebrew/bin/python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev,live]"
+pip install -e ".[dev,nqbot]"
 pytest
 ```
-
-## Backtests
-
-```bash
-# S&P 500 ETF, 50/200-day moving-average trend filter, with a chart
-python scripts/run_backtest.py --symbol SPY --strategy sma_cross --param fast=50 --param slow=200 --plot
-
-# Research on the index itself (no dividends in ^GSPC; use SPY for total return)
-python scripts/run_backtest.py --symbol ^GSPC --strategy momentum --start 1995-01-01
-
-# Nasdaq-100 ETF, short-term RSI dip-buying
-python scripts/run_backtest.py --symbol QQQ --strategy rsi_mean_reversion --param entry=10 --param exit=70
-
-# Stricter fills and higher costs
-python scripts/run_backtest.py --symbol SPY --strategy sma_cross --delay 2 --cost-bps 2 --slippage-bps 5
-```
-
-Common symbols: `SPY`, `QQQ`, `IWM`, `DIA` (ETFs); `^GSPC` (S&P 500), `^NDX` (Nasdaq-100), `^DJI`, `^RUT`, `^VIX` (indices); any US stock ticker. Add `--refresh` to pull the latest bars.
-
-## Walk-forward (forward) testing
-
-```bash
-python scripts/run_backtest.py --symbol SPY --strategy sma_cross --walk-forward --train-years 5 --test-years 1 --plot
-```
-
-This prints the parameters chosen for each window and their in-sample vs out-of-sample Sharpe. If the out-of-sample numbers collapse, the strategy is probably overfit.
 
 ## Free 1-minute data, no keys
 
@@ -119,26 +99,7 @@ python scripts/plot_sessions.py --start 2025-12-09 --end 2025-12-10 --tf 15
 ```
 Outputs go to `reports/levels/` (see `reports/levels/README.md`). They include high/low times, when each level was taken out, and QQQ VWAP and volume POC. Session windows are defined in `src/quant/sessions.py`.
 
-## Adding a strategy
-
-1. In `src/quant/strategies.py`, write `def my_strategy(prices, ...) -> pd.Series` that returns a target position in [-1, 1] for each day. Use only past data.
-2. Add it to `STRATEGIES`. Optionally add a parameter grid to `PARAM_GRIDS` for walk-forward.
-3. Run it with `--strategy my_strategy`.
-
-## Paper trading bot (Alpaca)
-
-1. Create a free Alpaca account and generate **paper** API keys.
-2. `cp .env.example .env` and fill in the keys. Leave `ALPACA_PAPER=true`.
-3. Check the plan with a dry run, which places no order:
-   ```bash
-   python bots/paper_bot.py --symbol SPY --strategy sma_cross --param fast=50 --param slow=200
-   ```
-4. Add `--execute` to submit the paper order. Schedule it once a day shortly before the close, around 15:50 New York time.
-
-Safety rails: the bot is a dry run unless `--execute` is passed. Live trading needs both `ALPACA_PAPER=false` and `--live`. It refuses index symbols. Paper-trade for a while, and compare the fills with the backtest, before considering real money.
-
 ## Caveats
 
-- Yahoo data is free but unofficial. For serious work, swap `quant/data.py` for a paid source such as Polygon, Databento, Alpaca or Alpha Vantage premium.
-- Single stock tickers carry survivorship bias: today's list of tickers excludes companies that were delisted.
+- Yahoo data is free but unofficial; it is used here only for cross-checks (SPX/NDX daily) and short 1-minute windows.
 - Past performance in a backtest is not a forecast.

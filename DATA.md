@@ -168,6 +168,6 @@ Rebuild with `scripts/download_free.py dxy`, `vix-daily`, and `yahoo ^VIX DX-Y.N
 | QQQ | Schwab price history, read-only | OHLC + volume, 04:00–20:00 ET (extended hours) | 2026-09-10 05:45 ET | daily | `data/schwab/QQQ_1min.parquet` |
 
 - **Schwab's depth (checked 2026-10-21):** 1-minute bars go back about 6 weeks (earliest 2026-09-10) and 5-minute bars about 6.5 months (from about 2026-04-01). Nothing older is available.
-- **Updates:** `bots/schwab_archiver.py` appends each night (launchd job `com.nqbot.archiver`, 02:00 local time), so the history keeps growing. Runs are logged in `data/schwab/archive_log.csv`.
+- **Updates:** `bots/schwab_archiver.py` appends each night (run by `bots/cloud_runner.py` on Northflank, 18:30 ET), so the history keeps growing. Runs are logged in `data/schwab/archive_log.csv`.
 - **Live stream vs history:** Schwab's live stream bars can differ from its history bars in busy minutes. On 2026-10-21, 3% of minutes differed (09:41–09:46 ET, closes up to 9 points). The archive stores the history version.
 - **/NQ is the rolling front month,** so contract rolls (quarterly) show up as price jumps.

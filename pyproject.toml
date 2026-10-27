@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quant"
 version = "0.1.0"
-description = "Backtesting, walk-forward testing and paper trading for index and US equity strategies"
+description = "Research and paper trading for Nasdaq-100 futures (/NQ)"
 requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.1",
@@ -17,7 +17,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-live = ["alpaca-py>=0.30"]
 nqbot = ["schwab-py>=1.5"]
 minute = ["alpaca-py>=0.30", "databento>=0.40"]
 dev = ["pytest>=8"]

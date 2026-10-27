@@ -9,5 +9,4 @@ Activate `.venv` first; run tests with `pytest`.
 - Backtests always include costs (default 1 bps commission + 2 bps slippage per unit turnover). Don't report zero-cost results as headline numbers.
 - Judge a strategy by its walk-forward (out-of-sample) results, not by the best in-sample parameters.
 - Index symbols (^GSPC, ^NDX) are for research only. The bot trades ETFs (SPY, QQQ).
-- `bots/paper_bot.py` is dry-run by default. Claude never runs it with `--execute` or `--live`; the user does that.
 - `bots/nq_paper_bot.py` (Schwab /NQ paper bot) is data-only: it must never send orders. Keep `ReadOnlyClient` in `src/quant/live/schwab_feed.py` and the order-code test in `tests/test_live_bot.py`; never add order endpoints. Claude does not run it against Schwab (live mode or `bots/schwab_login.py`); the user does. Replay mode is fine. The same applies to `bots/schwab_archiver.py`, `bots/gex_snapshot.py` and `bots/option_flow_capture.py`: market data only (`ReadOnlyClient.MARKET_DATA` = price history and option chains), run by the cloud runner, not by Claude.

@@ -81,3 +81,41 @@ def test_runner_gex_schedule():
     assert r.gex_due(datetime(2026, 10, 27, 15, 55, tzinfo=NY), done, cal) == "2026-10-27 15:50"
     assert r.gex_due(datetime(2026, 10, 27, 12, 0, tzinfo=NY), done, cal) is None   # 09:20 slot expired, no catch-up
     assert r.gex_due(datetime(2026, 10, 31, 9, 25, tzinfo=NY), set(), cal) is None   # Saturday
+
+
+def test_snapshot_through_read_only_client(tmp_path):
+    """The snapshot job works through ReadOnlyClient (only get_option_chain reachable) and fetches in small chunks."""
+    import importlib.util
+    import json
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("snap", Path(__file__).resolve().parents[1] / "bots/gex_snapshot.py")
+    snap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(snap)
+    snap.OUT, snap.time.sleep = tmp_path, (lambda s: None)
+    seen = []
+
+    class Resp:
+        def __init__(self, d):
+            self.d = d
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return json.loads(json.dumps(self.d))
+
+    class Fake:
+        def get_option_chain(self, symbol, contract_type=None, from_date=None, to_date=None, **k):
+            seen.append((contract_type.value, from_date, to_date))
+            c = chain(call_oi={600: 20000, 620: 50000}, put_oi={580: 30000, 560: 80000})
+            keep = "callExpDateMap" if contract_type.value == "CALL" else "putExpDateMap"
+            return Resp({k_: (v if k_ in (keep, "symbol", "underlyingPrice") else {}) for k_, v in c.items()})
+
+        def place_order(self, *a):
+            raise AssertionError("must never be reachable")
+
+    client = ReadOnlyClient(Fake(), extra=ReadOnlyClient.OPTION_CHAIN)
+    s = snap.snapshot(client, "QQQ", datetime(2026, 10, 27, 15, 50, tzinfo=NY), days=8, strikes=60)
+    assert {t for t, _, _ in seen} == {"CALL", "PUT"} and all((b - a).days < snap.CHUNK_DAYS for _, a, b in seen)
+    assert s["net_gex"] > 0 and s["call_wall"] in (600.0, 620.0)
+    assert len(list((tmp_path / "QQQ").glob("*.parquet"))) == 1

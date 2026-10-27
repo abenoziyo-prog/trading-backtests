@@ -77,3 +77,22 @@ def map_bands(src: pd.DataFrame, dst_close: pd.Series) -> pd.DataFrame:
     j = src[["close", "vwap", "sd"]].join(dst_close.rename("dst"), how="inner")
     r = j.dst / j.close
     return pd.DataFrame(dict(vwap=j.vwap * r, sd=j.sd * r), index=j.index)
+
+
+def noise_area(m: pd.DataFrame, lookback: int = 14) -> pd.DataFrame:
+    """The intraday "noise area" of Zarattini, Aziz & Barbon (2024): for each minute of the US session, the average
+    absolute move from that day's 09:30 open over the previous `lookback` sessions (|close / open - 1|, same minute).
+    Bands: upper = max(open, previous close) x (1 + sigma), lower = min(open, previous close) x (1 - sigma). Inputs:
+    1-minute US-session bars (NY time). Returns per minute: sigma, upper, lower (NaN until `lookback` sessions exist)."""
+    d = rth(m)
+    day = d.index.tz_localize(None).normalize()
+    mod = d.index.hour * 60 + d.index.minute
+    op = d.groupby(day).open.transform("first")
+    move = (d.close / op - 1).abs()
+    grid = pd.DataFrame(dict(day=day, mod=mod, move=move.to_numpy())).pivot_table(index="day", columns="mod", values="move")
+    sig = grid.rolling(lookback, min_periods=lookback).mean().shift()          # previous sessions only
+    sigma = sig.stack().reindex(pd.MultiIndex.from_arrays([day, mod])).to_numpy()
+    prev_close = d.groupby(day).close.last().shift()
+    pc = pd.Series(prev_close.reindex(day).to_numpy(), index=d.index)
+    hi, lo = np.maximum(op, pc), np.minimum(op, pc)
+    return pd.DataFrame(dict(sigma=sigma, upper=hi * (1 + sigma), lower=lo * (1 - sigma)), index=d.index)

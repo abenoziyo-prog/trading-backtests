@@ -104,7 +104,9 @@ Outputs go to `reports/levels/` (see `reports/levels/README.md`). They include h
 `src/quant/vwap.py`: session and weekly VWAP with volume-weighted standard-deviation bands (z = distance in σ), n-minute
 resampling and mapping of QQQ's VWAP onto /NQ (NSX has no volume). `scripts/vwap_study.py` measures how price behaves
 around the bands on 1/5/15/30-minute bars and runs a pre-registered band mean-reversion test
-(`reports/vwap/VWAP_STUDY.md`).
+(`reports/vwap/VWAP_STUDY.md`). `scripts/vwap_grid.py` runs ~300 pre-registered configurations of five VWAP
+families (trend, band fade, band breakout, trend pullback, noise-area momentum) across timeframes and deviations,
+ranked on 2024 and judged on 2025 (`reports/vwap/VWAP_GRID.md`).
 
 ## Caveats
 

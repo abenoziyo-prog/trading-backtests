@@ -1,7 +1,8 @@
 """Daily status report: <ledger dir>/status.md, rebuilt from trades.csv each time a session's night or US day closes.
 
 Sections: totals, P&L by book and by session, per-strategy live vs backtest (baseline.json, made by
-scripts/make_live_baseline.py), kill-switch distance and the full trade log. The kill switch is a report only:
+scripts/make_live_baseline.py), kill-switch distance, the full trade log, P&L by GEX regime at entry (gex_tags.py)
+and the shadow book. The kill switch is a report only:
 the bot never pauses a strategy on its own.
 
 Kill-switch rule (pre-set, per strategy): pause when the live drawdown exceeds DD_MULT x the backtest max drawdown,
@@ -167,7 +168,35 @@ def shadow_section(shadow_csv: Path, baseline: dict | None = None) -> str:
     return "\n".join(out) + "\n"
 
 
+def gex_section(ledger_dir: Path, **dirs) -> str:
+    """P&L by the GEX state at entry (quant.live.gex_tags), live and shadow. Also writes the tagged trades to
+    ledger/trades_gex.csv and ledger/shadow_trades_gex.csv. Never stops the report: a failure becomes a note."""
+    try:
+        import pandas as pd
+
+        from quant.live.gex_tags import regime_tables, tag
+        out = ["", "## P&L by GEX regime (state at entry)", "",
+               "Recording only: no strategy uses GEX yet. The tests that decide whether it ever will are pre-registered "
+               "in docs/GEX_FRAMEWORK.md. Regimes use the naive sign (calls +, puts −); \"no data\" = before the first "
+               "snapshot or capture.", ""]
+        for title, src, dst in (("Live books", "trades.csv", "trades_gex.csv"), ("Shadow book", "shadow_trades.csv", "shadow_trades_gex.csv")):
+            f = ledger_dir / src
+            t = pd.read_csv(f) if f.exists() else pd.DataFrame()
+            if "taken" in t:
+                t = t[(t.taken.astype(str) == "True") & t.pnl_usd.notna()]
+            if t.empty:
+                out += [f"### {title}", "", "No trades yet.", ""]
+                continue
+            g = tag(t.reset_index(drop=True), ledger_dir.parent, **dirs)
+            g.to_csv(ledger_dir / dst, index=False)
+            out += [f"### {title}", ""] + regime_tables(g)
+        return "\n".join(out) + "\n"
+    except Exception as exc:  # the GEX files are optional; the report must still be written
+        return f"\n## P&L by GEX regime\n\nUnavailable: {exc!r}\n"
+
+
 def write_status(ledger_dir: Path, now: datetime | None = None) -> Path:
     path = ledger_dir / "status.md"
-    path.write_text(build(ledger_dir / "trades.csv", now=now) + shadow_section(ledger_dir / "shadow_trades.csv"))
+    path.write_text(build(ledger_dir / "trades.csv", now=now) + gex_section(ledger_dir)
+                    + shadow_section(ledger_dir / "shadow_trades.csv"))
     return path

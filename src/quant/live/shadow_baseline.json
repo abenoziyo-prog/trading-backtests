@@ -7,7 +7,7 @@
   "pf": 1.54,
   "net": 37863.36,
   "avg": 435.21,
-  "evaluated": "2026-10-27 15:04 UTC"
+  "evaluated": "2026-10-24 09:05 UTC"
  },
  "drift_trend_gate": {
   "session": "overnight",
@@ -108,35 +108,5 @@
   "net": 50248.28,
   "avg": 193.26,
   "evaluated": "2026-10-27 15:00 UTC"
- },
- "us_em_bracket": {
-  "session": "us",
-  "verdict": "FAIL",
-  "trades": 391,
-  "win_pct": 47.1,
-  "pf": 1.12,
-  "net": 58330.18,
-  "avg": 149.18,
-  "evaluated": "2026-10-27 17:41 UTC"
- },
- "us_em_stop_cap": {
-  "session": "us",
-  "verdict": "FAIL",
-  "trades": 656,
-  "win_pct": 55.9,
-  "pf": 1.34,
-  "net": 163407.62,
-  "avg": 249.1,
-  "evaluated": "2026-10-27 17:41 UTC"
- },
- "us_em_target": {
-  "session": "us",
-  "verdict": "FAIL",
-  "trades": 483,
-  "win_pct": 44.9,
-  "pf": 1.32,
-  "net": 140334.4,
-  "avg": 290.55,
-  "evaluated": "2026-10-27 17:41 UTC"
  }
 }

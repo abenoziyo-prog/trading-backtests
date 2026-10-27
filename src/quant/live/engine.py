@@ -52,16 +52,12 @@ class DayLevels:
 @dataclass(frozen=True)
 class ExitPolicy:
     """Dynamic exit rules on top of a strategy's own stop/target (all optional; None = rule off).
-      stop_pts       set the initial stop this many points from entry, replacing the strategy's own (applied at entry)
-      target_pts     set the target this many points from entry, replacing the strategy's own (applied at entry)
       max_loss_pts   cap the initial stop distance at this many points (applied at entry)
       be_trigger_pts once the trade has been this far in profit, move the stop to entry +/- be_offset_pts
       trail_pts      trail the stop this far behind the best price (from be_trigger_pts if set, else from entry)
       time_stop_min  after this many minutes, exit at the bar's close if the trade is not in profit
     Stop moves are decided at a bar's close and apply from the next bar (no intrabar look-ahead)."""
 
-    stop_pts: float | None = None
-    target_pts: float | None = None
     max_loss_pts: float | None = None
     be_trigger_pts: float | None = None
     be_offset_pts: float = 1.0
@@ -100,11 +96,7 @@ class Trade:
         return None if self.exit is None else self.pnl_pts / (self.risk0 or abs(self.entry - self.stop))
 
     def attach(self, policy: ExitPolicy | None) -> None:
-        """Apply exit rules at entry: set or cap the stop, set the target, remember the initial risk."""
-        if policy is not None and policy.stop_pts is not None:
-            self.stop = self.entry - self.side * policy.stop_pts
-        if policy is not None and policy.target_pts is not None:
-            self.target = self.entry + self.side * policy.target_pts
+        """Apply exit rules at entry: remember the initial risk, cap the stop distance."""
         self.risk0 = abs(self.entry - self.stop)
         self.policy, self.best = policy, self.entry
         if policy is not None and policy.max_loss_pts is not None and self.risk0 > policy.max_loss_pts:

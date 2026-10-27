@@ -11,8 +11,7 @@ An idea is a Python file in ideas/ defining:
     trades(ctx, **params) -> DataFrame with columns day, side, entry_time, exit_time, pnl_usd, r_multiple
     PARAMS      optional dict of default parameters passed to trades()
     NEIGHBORS   optional list of parameter dicts (nearby settings) for the robustness gate
-    REPLACES    optional: a live strategy the idea would replace (gate G4 replace instead of G4 add-on), or a list
-                of them (then trades() returns a `cand` column naming the strategy of each trade)
+    REPLACES    optional: a live strategy the idea would replace (gate G4 replace instead of G4 add-on)
     BASELINE    optional: the baseline to use ("us", "overnight" or "drift"; default = SESSION)
 Ideas evaluated in one run count together for the luck correction: each faces the bar of the whole batch.
 Outputs (in --out, default lab_results/): <name>.json and <name>.md per idea, registry.csv (append-only record of
@@ -53,7 +52,7 @@ def normalize(t: pd.DataFrame) -> pd.DataFrame:
         else pd.to_datetime(t["day"]).dt.normalize()
     for c in ("entry_time", "exit_time"):
         t[c] = pd.to_datetime(t[c], utc=True)
-    return t[(["cand"] if "cand" in t else []) + ["day", "side", "entry_time", "exit_time", "pnl_usd", "r_multiple"]]
+    return t[["day", "side", "entry_time", "exit_time", "pnl_usd", "r_multiple"]]
 
 
 def fmt(x, money=False, d=2):
@@ -71,7 +70,7 @@ def report(m, r: dict) -> str:
     gates = "\n".join(f"| {k} | {'✅ pass' if v else '❌ fail'} |" for k, v in r["gates"].items())
     blk = " | ".join(fmt(x, money=True) for x in c["blocks"])
     heads = " | ".join(f"{b:%b %y}" for b in BLOCKS)
-    rp = "" if not r.get("replace") else "\n**Replacing " + (m.REPLACES if isinstance(m.REPLACES, str) else ", ".join(m.REPLACES)) + " in the live book:**\n" + "\n".join(
+    rp = "" if not r.get("replace") else "\n**Replacing " + m.REPLACES + " in the live book:**\n" + "\n".join(
         f"- {k}: net {fmt(v['base_net'], money=True)} → {fmt(v['new_net'], money=True)}; net / max drawdown "
         f"{fmt(v['base_ret_dd'])} → {fmt(v['new_ret_dd'])}." for k, v in r["replace"].items()) + "\n"
     nb = "" if not r["neighbors"] else f"\n**Neighbours:** {r['neighbors']['passed']} of {r['neighbors']['n']} pass G3.\n"

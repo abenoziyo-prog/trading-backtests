@@ -39,10 +39,8 @@ class LiveContext:
     """The lab's idea context (lab/data.py), built from 1-minute bars (NY time) instead of the NSX research files."""
     us, night = research_us, research_night
 
-    def __init__(self, minutes: pd.DataFrame, cal: Calendar, vix_daily: pd.Series | None = None):
-        """vix_daily: VIX closes indexed by naive date (features.vix = the close before each session, as in the lab)."""
+    def __init__(self, minutes: pd.DataFrame, cal: Calendar):
         self.m, self.cal = minutes.sort_index(), cal
-        self.vix_daily = vix_daily if vix_daily is not None else pd.Series(dtype=float)
 
     @cached_property
     def _mod(self) -> np.ndarray:
@@ -101,13 +99,6 @@ class LiveContext:
     def features(self) -> pd.DataFrame:
         f = pd.DataFrame({d["day"]: dict(gap_R=(d["o"][0] - self.levels.loc[d["day"], "PDC"]) / d["R0"]) for d in self.us_days}).T
         f["gap_down"], f["gap_up"], f["flat_open"] = f.gap_R < -0.10, f.gap_R > 0.10, f.gap_R.abs() <= 0.10
-        f["vix"] = np.nan
-        v = self.vix_daily.sort_index()
-        if len(v):
-            v.index = pd.to_datetime(v.index)
-            i = v.index.searchsorted(f.index, side="left") - 1     # the last close strictly before the session day
-            ok = (i >= 0) & (f.index - v.index[np.clip(i, 0, None)] <= pd.Timedelta(days=5))
-            f["vix"] = np.where(ok, v.to_numpy()[np.clip(i, 0, None)], np.nan)
         return f
 
 
@@ -167,20 +158,9 @@ class ShadowBook:
             w.writerows(rows)
 
     def context(self, upto: date) -> LiveContext:
-        since = upto - timedelta(days=self.history_days)
-        m = load_minutes(self.state, self.archive, since)
+        m = load_minutes(self.state, self.archive, upto - timedelta(days=self.history_days))
         # the session's own data only: nothing after its close can leak into a decision
-        return LiveContext(m[m.index < pd.Timestamp(datetime.combine(upto, time(16)), tz=NY)], self.cal, self.vix_daily(since))
-
-    def vix_daily(self, since: date) -> pd.Series:
-        """VIX closes from the archive and the intraday capture (quant.live.vix_tags); empty if there are none yet."""
-        try:
-            from quant.live import vix_tags
-            vix = vix_tags.load_live(self.state, self.archive.parent, since).get("vix")
-            return vix_tags.daily_closes(vix) if vix is not None and len(vix) else pd.Series(dtype=float)
-        except Exception:
-            log.exception("shadow book: VIX closes unavailable")
-            return pd.Series(dtype=float)
+        return LiveContext(m[m.index < pd.Timestamp(datetime.combine(upto, time(16)), tz=NY)], self.cal)
 
     def close(self, day: date, session: str) -> int:
         """Record every idea of `session` ("us" or "overnight") for trading day `day`, once. Returns trades added."""
@@ -194,9 +174,6 @@ class ShadowBook:
             return 0
         now = datetime.now(NY).strftime("%Y-%m-%d %H:%M")
         for m in todo:
-            if hasattr(m, "ready") and not m.ready(ctx, key):  # e.g. no VIX close yet: retry later, never record empty
-                log.warning("shadow idea %s: inputs for %s not available yet", m.NAME, day)
-                continue
             try:
                 t = m.trades(ctx, **dict(getattr(m, "PARAMS", {})))
             except Exception:

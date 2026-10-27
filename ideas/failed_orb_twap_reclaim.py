@@ -37,7 +37,7 @@ def trades(ctx, or_min=15, tf=5, entry_end=720, target="range") -> pd.DataFrame:
             if (broke == 1 and cl >= twap[last]) or (broke == -1 and cl <= twap[last]):
                 continue
             side = -broke
-            risk = side * (cl - ext) * -1                  # stop at the post-breakout extreme
+            risk = side * (cl - ext)                       # stop at the post-breakout extreme
             tgt = (orl if side == -1 else orh) if target == "range" else cl + side * 1.5 * risk
             pos = last + 1
             if risk > 0 and side * (tgt - cl) > 0 and pos < len(d["c"]):

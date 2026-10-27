@@ -8,7 +8,7 @@ sandbox). Keeps the bot's files in a database instead of a volume.
   3. start bots/nq_paper_bot.py (restarted if it exits; after 5 quick failures the runner exits so the
      platform restarts the container)
   4. every SYNC_S seconds: save changed files back to the database (the token refresh, bars, ledger, audit)
-  5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ, QQQ, /ES, SPY 1-minute history), log the database size, save
+  5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ, QQQ, /ES, SPY, VIX family 1-minute history), log the database size, save
   6. trading days 09:20 and 16:20 ET: run bots/gex_snapshot.py (option chains -> dealer gamma), then save
   7. trading days 09:25-16:15 ET: keep bots/option_flow_capture.py --loop running (near-expiry chains every 5 minutes;
      the 16:20 snapshot waits for it to end, so the two never hold memory at the same time)

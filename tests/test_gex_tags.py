@@ -7,7 +7,7 @@ import pytest
 
 from quant.live.gex_tags import tag
 from quant.live.ledger import TRADE_FIELDS
-from quant.live.status import gex_section, write_status
+from quant.live.status import state_sections, write_status
 
 
 def snapshot_rows(asof, qqq_regime, spx_regime, flip_pct):
@@ -68,10 +68,11 @@ def test_status_has_regime_section_and_tagged_csv(world, tmp_path):
                                ("2026-10-27T11:00:00-04:00", 50.0, False)):
             w.writerow(dict(day="2026-10-27", strategy="ORB-C", side="long", taken=taken, entry_time=et,
                             exit_time="2026-10-27T12:00:00-04:00", pnl_usd=pnl, book="US"))
-    md = gex_section(led, gex_dir=world["gex"], flow_dir=world["flow"], archive=world["archive"])
+    md = state_sections(led, tmp_path / "schwab", gex_dir=world["gex"], flow_dir=world["flow"], archive=world["archive"])
     assert "## P&L by GEX regime" in md and "| positive | 2 | 1 / 1 | +$200.00 |" in md
     assert "### Shadow book" in md and "No trades yet." in md
-    g = pd.read_csv(led / "trades_gex.csv")
+    assert "## P&L by VIX state at entry" in md and "| no data | 2 |" in md   # no VIX files in this world
+    g = pd.read_csv(led / "trades_tagged.csv")
     assert len(g) == 2 and set(g.regime_qqq) == {"positive"}
 
 
@@ -81,4 +82,4 @@ def test_status_survives_missing_gex_files(tmp_path):
     with (led / "trades.csv").open("w", newline="") as f:
         csv.DictWriter(f, fieldnames=TRADE_FIELDS).writeheader()
     md = write_status(led, now=datetime(2026, 10, 27, 16, 5)).read_text()
-    assert "## P&L by GEX regime" in md and "## Shadow book" in md
+    assert "## P&L by GEX regime" in md and "## P&L by VIX state" in md and "## Shadow book" in md

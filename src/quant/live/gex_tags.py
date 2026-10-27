@@ -115,14 +115,17 @@ def tag(trades: pd.DataFrame, state_dir: Path, gex_dir: Path = GEX_DIR, flow_dir
     return out
 
 
-def regime_tables(tagged: pd.DataFrame, pnl: str = "pnl_usd") -> list[str]:
-    """P&L split by QQQ regime, QQQ x SPX regime, side of the QQQ flip and near-term (0-3 day) regime."""
+SPLITS = [("QQQ regime (09:20 / 16:20 snapshot)", "regime_qqq"), ("QQQ × SPX regime", "regime_combo"),
+          ("QQQ vs gamma flip", "flip_side"), ("Near-term QQQ regime (0-3 day expiries, 5-min capture)", "near_regime")]
+
+
+def regime_tables(tagged: pd.DataFrame, splits: list[tuple[str, str]] = SPLITS, pnl: str = "pnl_usd") -> list[str]:
+    """One P&L table per (title, column) split; empty tags count as "no data"."""
     from quant.live.status import money, table  # status imports this module lazily: no cycle at import time
     out = []
     p = tagged[pnl].astype(float)
-    for title, col in (("QQQ regime (09:20 / 16:20 snapshot)", "regime_qqq"), ("QQQ × SPX regime", "regime_combo"),
-                       ("QQQ vs gamma flip", "flip_side"), ("Near-term QQQ regime (0-3 day expiries, 5-min capture)", "near_regime")):
-        key = tagged[col].replace("", "no data").fillna("no data")
+    for title, col in splits:
+        key = tagged[col].fillna("").astype(str).replace("", "no data")
         rows = []
         for k in sorted(key.unique(), key=lambda x: (x == "no data", x)):
             x = p[key == k]

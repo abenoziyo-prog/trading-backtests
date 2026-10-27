@@ -44,7 +44,8 @@ def stats(p: pd.Series) -> dict:
                 worst_streak=int(worst), max_dd=round(float((eq - eq.cummax().clip(lower=0)).min()), 2), net=round(float(p.sum()), 2))
 
 
-def main() -> None:
+def backtest_trades() -> pd.DataFrame:
+    """Taken trades of the live engines over the 18-month window: day, strategy, entry_time (UTC), pnl_usd, book."""
     lr = load("lr", "us_level_reactions_tf.py")
     lv = pd.read_csv(ROOT / "reports/us_session_levels/daily_levels_NSX.csv", index_col=0)
     lv.index = pd.to_datetime(lv.index)
@@ -56,6 +57,11 @@ def main() -> None:
     t["entry_time"] = pd.to_datetime(t.entry_time, utc=True)
     t = t.sort_values("entry_time")
     t["book"] = t.strategy.map(book_of)
+    return t
+
+
+def main() -> None:
+    t = backtest_trades()
     days = pd.to_datetime(t.day)
     out = dict(window=f"{days.min():%Y-%m-%d} -> {days.max():%Y-%m-%d}", sessions=int(days.nunique()),
                strategies={s: {"book": book_of(s), **stats(g.pnl_usd)} for s, g in t.groupby("strategy")},

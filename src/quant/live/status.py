@@ -1,7 +1,7 @@
 """Daily status report: <ledger dir>/status.md, rebuilt from trades.csv each time a session's night or US day closes.
 
 Sections: totals, P&L by book and by session, per-strategy live vs backtest (baseline.json, made by
-scripts/make_live_baseline.py), kill-switch distance, the full trade log, P&L by GEX regime at entry (gex_tags.py)
+scripts/make_live_baseline.py), kill-switch distance, the full trade log, P&L by GEX regime and VIX state at entry (gex_tags.py, vix_tags.py)
 and the shadow book. The kill switch is a report only:
 the bot never pauses a strategy on its own.
 
@@ -168,35 +168,51 @@ def shadow_section(shadow_csv: Path, baseline: dict | None = None) -> str:
     return "\n".join(out) + "\n"
 
 
-def gex_section(ledger_dir: Path, **dirs) -> str:
-    """P&L by the GEX state at entry (quant.live.gex_tags), live and shadow. Also writes the tagged trades to
-    ledger/trades_gex.csv and ledger/shadow_trades_gex.csv. Never stops the report: a failure becomes a note."""
-    try:
-        import pandas as pd
+STATE_NOTE = ("Recording only: no strategy uses these yet. The tests that decide whether one ever will are "
+              "pre-registered in docs/GEX_FRAMEWORK.md. \"no data\" = no snapshot, capture or bars covering that entry.")
 
-        from quant.live.gex_tags import regime_tables, tag
-        out = ["", "## P&L by GEX regime (state at entry)", "",
-               "Recording only: no strategy uses GEX yet. The tests that decide whether it ever will are pre-registered "
-               "in docs/GEX_FRAMEWORK.md. Regimes use the naive sign (calls +, puts −); \"no data\" = before the first "
-               "snapshot or capture.", ""]
-        for title, src, dst in (("Live books", "trades.csv", "trades_gex.csv"), ("Shadow book", "shadow_trades.csv", "shadow_trades_gex.csv")):
-            f = ledger_dir / src
-            t = pd.read_csv(f) if f.exists() else pd.DataFrame()
-            if "taken" in t:
-                t = t[(t.taken.astype(str) == "True") & t.pnl_usd.notna()]
-            if t.empty:
-                out += [f"### {title}", "", "No trades yet.", ""]
-                continue
-            g = tag(t.reset_index(drop=True), ledger_dir.parent, **dirs)
-            g.to_csv(ledger_dir / dst, index=False)
-            out += [f"### {title}", ""] + regime_tables(g)
+
+def tagged_trades(ledger_dir: Path, schwab_dir: Path | None = None, **gex_dirs) -> dict:
+    """Live and shadow trades with the GEX and VIX state at entry (quant.live.gex_tags / vix_tags), also written to
+    ledger/trades_tagged.csv and ledger/shadow_trades_tagged.csv."""
+    import pandas as pd
+
+    from quant.live import gex_tags, vix_tags
+    schwab_dir = schwab_dir or gex_tags.ROOT / "data" / "schwab"
+    out = {}
+    for name, src, dst in (("Live books", "trades.csv", "trades_tagged.csv"), ("Shadow book", "shadow_trades.csv", "shadow_trades_tagged.csv")):
+        f = ledger_dir / src
+        t = pd.read_csv(f) if f.exists() else pd.DataFrame()
+        if "taken" in t:
+            t = t[(t.taken.astype(str) == "True") & t.pnl_usd.notna()]
+        if t.empty:
+            out[name] = t
+            continue
+        g = gex_tags.tag(t.reset_index(drop=True), ledger_dir.parent, **gex_dirs)
+        g = vix_tags.tag(g, ledger_dir.parent, schwab_dir)
+        g.to_csv(ledger_dir / dst, index=False)
+        out[name] = g
+    return out
+
+
+def state_sections(ledger_dir: Path, schwab_dir: Path | None = None, **gex_dirs) -> str:
+    """P&L by GEX regime and by VIX state at entry, live and shadow. Never stops the report: a failure becomes a note."""
+    try:
+        from quant.live import gex_tags, vix_tags
+        tagged = tagged_trades(ledger_dir, schwab_dir, **gex_dirs)
+        out = []
+        for head, extra, splits in (("## P&L by GEX regime (state at entry)", "Regimes use the naive sign (calls +, puts −).", gex_tags.SPLITS),
+                                    ("## P&L by VIX state at entry", "Definitions: src/quant/live/vix_tags.py.", vix_tags.SPLITS)):
+            out += ["", head, "", f"{STATE_NOTE} {extra}", ""]
+            for name, g in tagged.items():
+                out += [f"### {name}", ""] + (gex_tags.regime_tables(g, splits) if len(g) else ["No trades yet.", ""])
         return "\n".join(out) + "\n"
-    except Exception as exc:  # the GEX files are optional; the report must still be written
-        return f"\n## P&L by GEX regime\n\nUnavailable: {exc!r}\n"
+    except Exception as exc:  # the GEX and VIX files are optional; the report must still be written
+        return f"\n## P&L by GEX regime and VIX state\n\nUnavailable: {exc!r}\n"
 
 
 def write_status(ledger_dir: Path, now: datetime | None = None) -> Path:
     path = ledger_dir / "status.md"
-    path.write_text(build(ledger_dir / "trades.csv", now=now) + gex_section(ledger_dir)
+    path.write_text(build(ledger_dir / "trades.csv", now=now) + state_sections(ledger_dir)
                     + shadow_section(ledger_dir / "shadow_trades.csv"))
     return path

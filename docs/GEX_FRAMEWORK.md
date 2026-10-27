@@ -1,4 +1,4 @@
-# GEX and option flow: how we use it, and how we prove it first
+# GEX, option flow and VIX: how we use them, and how we prove it first
 
 Status: **pre-registered 2026-10-27, no results yet.** Nothing here becomes a trading rule until it passes the tests below. Each definition is frozen. A change means a new dated version of this file, and the earlier version keeps counting toward the number of tests.
 
@@ -70,6 +70,34 @@ The obstacle is two-way causality. Options react to price at least as much as pr
 | F3 | A surge in 0DTE share together with a one-sided flow imbalance precedes range expansion | Realized range over the next 30 min | Intervals without the surge |
 | F4 *(exploratory)* | Customer flow in SPX that diverges from flow in NDX/QQQ leads NQ against ES | NQ − β·ES return at t+1 | — |
 
+### VIX (added 2026-10-27, same rules)
+
+The definitions are in `src/quant/live/vix_tags.py`, and the same code tags live trades, shadow trades and the backtest.
+- **Sources:**
+  - `bots/schwab_archiver.py` keeps 1-minute bars of $VIX, $VIX3M, $VIX9D and $VVIX.
+  - The 5-minute capture refreshes today's bars of the same four, so same-day trades get tagged.
+- **Buckets (frozen):**
+  - VIX level at the prior close: < 15, 15–20, 20–25, ≥ 25;
+  - VIX move since the prior close: down > 5%, flat, up > 5%;
+  - NQ/VIX coupling, the 60-minute correlation of 1-minute changes before entry: coupled (< −0.6), loose, decoupled (≥ −0.2);
+  - term structure: VIX/VIX3M ≥ 1 = backwardation.
+
+**First look (exploratory, on the build window; `scripts/vix_strategy_study.py`, `reports/vix/VIX_STUDY.md`):**
+- Daily NQ/VIX correlation is −0.75. The rolling 20-day correlation has a median of −0.80 and a maximum of −0.02.
+- The prior VIX close correlates +0.43 with NQ's session range: about 0.9% below VIX 15, about 1.9% at 25 and above.
+- 5-minute changes correlate −0.78, but neither series leads the other at 5 minutes (|corr| < 0.05).
+- The live strategies lost money only with VIX < 15: 186 trades, PF 0.92, spread over four separate episodes. The best results came at VIX 20–25 (PF 1.90).
+
+| ID | Hypothesis | Measure | Control |
+|---|---|---|---|
+| V1 | The live strategies earn less with VIX < 15 | Avg P&L per trade and PF by level, live and shadow | 15–25 |
+| V2 | When NQ and VIX decouple (both up, or correlation ≥ −0.2), the next 30–60 min carry an unusual move | NQ realized range in the next 60 min | Coupled intervals |
+| V3 | Backwardation (VIX/VIX3M ≥ 1) marks trend days: bigger ranges, worse mean reversion | Range/ATR, VR(12) | Contango days |
+| V4 | GEX and VIX interact: negative gamma with VIX rising is when breakouts work best | ORB-C/GF-1 P&L by regime × VIX move | Other combinations |
+| V5 *(exploratory)* | A VIX9D/VIX spike (short-dated fear) precedes intraday reversals | NQ return in the next 30 min after the spike | Matched non-spike times |
+
+The count of hypotheses rises to 20 (6 exploratory). The required t is about 3.0.
+
 ## 4. How a hypothesis passes
 
 1. **Frozen definitions.** The ones above; any change is versioned and dated.
@@ -77,7 +105,7 @@ The obstacle is two-way causality. Options react to price at least as much as pr
    - The first 40 sessions may only be used to check data quality and to settle the definitions marked exploratory.
    - Confirmatory tests run on sessions after that.
    - Daily hypotheses (R, W) need **at least 60 sessions** for a first verdict (around late January 2027, counting from 2026-10-28). Interval hypotheses (F) have about 80 observations a day but must be clustered by day, so they also need 40+ sessions.
-3. **Number of tests counted.** 15 hypotheses above (5 exploratory). The required t is corrected for all of them, in the same way as the lab's batch correction: about 2.9 for 15 at 5%.
+3. **Number of tests counted.** 20 hypotheses above (6 exploratory). The required t is corrected for all of them, in the same way as the lab's batch correction: about 3.0 for 20 at 5%.
 4. **Placebos are mandatory** for every level test (W). Both sign conventions are reported for every regime test (R).
 5. **Value test before any use.** A passing hypothesis becomes a filter or a level only if it improves a live strategy. Net ≥ base − 5% **and** net/maxDD ≥ base in both halves: the lab's G4 replace gate. Until then it runs in the shadow book only.
 

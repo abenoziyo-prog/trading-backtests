@@ -3,15 +3,19 @@
     python bots/option_flow_capture.py --loop        # 09:30-16:15 ET, one capture per 5-minute mark, then exit
     python bots/option_flow_capture.py               # one capture now
 
-Read-only: the only Schwab call is the option chain (ReadOnlyClient allows nothing else). Started by
+Read-only: the only Schwab calls are option chains and price history (ReadOnlyClient allows nothing else). Started by
 bots/cloud_runner.py on trading days. Schwab has no option time & sales and no chain history, so these snapshots are
 the raw material for intraday flow: per contract, cumulative volume (the change between captures = contracts traded),
 the last trade (price, size, time) against the bid/ask, implied volatility, greeks and open interest. Open interest is
 the exchanges' previous-close figure and does not change during the day; the next morning's change against today's
 volume tells whether today's trades opened or closed positions. Analysis runs offline (src/quant/live/flow.py).
+Each capture also refreshes today's 1-minute bars of the VIX family (price history: $VIX, $VIX3M, $VIX9D, $VVIX), so
+trades can be tagged with the VIX state at entry the same day (src/quant/live/vix_tags.py); the nightly archiver keeps
+the long history.
 
 Kept light for the 256 MB container: no pandas, one small request per symbol and contract type, plain gzip CSV.
-Files: data/schwab/flow/<SYMBOL>/<YYYY-MM-DD>/<HHMM>.csv.gz and data/schwab/flow/capture_log.csv.
+Files: data/schwab/flow/<SYMBOL>/<YYYY-MM-DD>/<HHMM>.csv.gz, data/schwab/flow/capture_log.csv and
+data/schwab/vix/<YYYY-MM-DD>/<VIX|VIX3M|VIX9D|VVIX>.csv (rewritten at each capture).
 """
 from __future__ import annotations
 
@@ -34,7 +38,9 @@ from quant.live.schwab_feed import ReadOnlyClient, make_client  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "flow"
+VIX_OUT = ROOT / "data" / "schwab" / "vix"
 SYMBOLS = ["QQQ", "SPY", "$NDX", "$SPX"]
+VIX_SYMBOLS = ["$VIX", "$VIX3M", "$VIX9D", "$VVIX"]
 DAYS = 3        # expirations up to 3 calendar days ahead: 0DTE and the next ones carry the intraday flow
 STRIKES = 80    # Schwab's strike_count is the total around the money (checked 2026-10-27: 30 gave 15 a side): ~40 each side
 EVERY_MIN = 5
@@ -42,7 +48,7 @@ START, END = dtime(9, 30), dtime(16, 15)  # SPX/NDX options trade until 16:15
 FIELDS = ["asof", "symbol", "spot", "under_bid", "under_ask", "under_volume", "put_call", "occ", "expiry", "dte", "strike",
           "bid", "ask", "last", "mark", "bid_size", "ask_size", "last_size", "volume", "open_interest", "iv", "delta",
           "gamma", "theta", "vega", "quote_ms", "trade_ms", "multiplier"]
-LOG_FIELDS = ["asof", "symbol", "contracts", "seconds", "error"]
+LOG_FIELDS = ["asof", "symbol", "contracts", "seconds", "error"]  # contracts = bars for the VIX family
 
 
 def folder(symbol: str) -> str:
@@ -96,12 +102,35 @@ def capture(client: ReadOnlyClient, symbol: str, now: datetime, days: int = DAYS
     return len(rows)
 
 
-def capture_all(client: ReadOnlyClient, symbols: list[str], now: datetime) -> list[dict]:
+def vix_bars(client: ReadOnlyClient, symbol: str, now: datetime) -> int:
+    """Today's 1-minute bars of one VIX-family index, from 03:00 ET (rewrites the day's file)."""
+    start = now.replace(hour=3, minute=0, second=0, microsecond=0)
+    r = client.get_price_history_every_minute(symbol, start_datetime=start, end_datetime=now, need_extended_hours_data=True)
+    r.raise_for_status()
+    candles = r.json().get("candles", [])
+    if not candles:
+        raise ValueError(f"no bars for {symbol}")
+    d = VIX_OUT / now.date().isoformat()
+    d.mkdir(parents=True, exist_ok=True)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["time", "open", "high", "low", "close"])
+    for c in candles:
+        t = datetime.fromtimestamp(c["datetime"] / 1000, NY)
+        if t < now.replace(second=0, microsecond=0):   # completed minutes only
+            w.writerow([t.isoformat(), c["open"], c["high"], c["low"], c["close"]])
+    tmp = d / f"{symbol.lstrip('$')}.tmp"
+    tmp.write_text(buf.getvalue())
+    tmp.replace(d / f"{symbol.lstrip('$')}.csv")
+    return len(candles)
+
+
+def capture_all(client: ReadOnlyClient, symbols: list[str], now: datetime, vix: list[str] = VIX_SYMBOLS) -> list[dict]:
     log = []
-    for sym in symbols:
+    for sym in symbols + vix:
         t0 = time.time()
         try:
-            n, err = capture(client, sym, now), ""
+            n, err = (vix_bars(client, sym, now) if sym in vix else capture(client, sym, now)), ""
         except Exception as exc:  # one symbol failing must not stop the others
             n, err = 0, repr(exc)[:300]
         log.append(dict(asof=now.isoformat(timespec="seconds"), symbol=sym, contracts=n, seconds=round(time.time() - t0, 1), error=err))
@@ -134,7 +163,7 @@ def main() -> None:
     if missing:
         sys.exit(f"missing environment variables: {', '.join(missing)} (see deploy/nq_paper_bot.env.example)")
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
-                         extra=ReadOnlyClient.OPTION_CHAIN)
+                         extra=ReadOnlyClient.OPTION_CHAIN | ReadOnlyClient.PRICE_HISTORY)
     if not a.loop:
         for r in capture_all(client, a.symbols, datetime.now(NY)):
             print(r)

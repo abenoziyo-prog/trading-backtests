@@ -63,17 +63,25 @@ def test_capture_through_read_only_client(tmp_path, monkeypatch):
             side = "CALL" if "CALL" in str(contract_type) else "PUT"
             return FakeResponse(chain(720.5, side, 100, 1.2, 1.1, 1.2, 25.0, 1))
 
+        def get_price_history_every_minute(self, symbol, start_datetime, end_datetime, **kw):
+            calls.append((symbol, "bars"))
+            ms = int(datetime(2026, 10, 27, 10, 3, tzinfo=NY).timestamp() * 1000)
+            return FakeResponse({"candles": [dict(datetime=ms + 60000 * k, open=17, high=17.2, low=16.9, close=17.1) for k in range(3)]})
+
         def place_order(self, *a):
             raise AssertionError("never")
 
-    c = ReadOnlyClient(Fake(), extra=ReadOnlyClient.OPTION_CHAIN)
+    monkeypatch.setattr(m, "VIX_OUT", tmp_path / "vix")
+    c = ReadOnlyClient(Fake(), extra=ReadOnlyClient.OPTION_CHAIN | ReadOnlyClient.PRICE_HISTORY)
     with pytest.raises(PermissionError):
         c.place_order
-    log = m.capture_all(c, ["QQQ", "$SPX"], datetime(2026, 10, 27, 10, 5, tzinfo=NY))
-    assert [r["contracts"] for r in log] == [2, 2] and len(calls) == 4
+    log = m.capture_all(c, ["QQQ", "$SPX"], datetime(2026, 10, 27, 10, 5, tzinfo=NY), vix=["$VIX"])
+    assert [r["contracts"] for r in log] == [2, 2, 3] and len(calls) == 5
+    v = pd.read_csv(tmp_path / "vix/2026-10-27/VIX.csv")
+    assert len(v) == 2 and v["time"].iloc[-1].startswith("2026-10-27T10:04")   # the 10:05 minute is not complete yet
     rows = pd.read_csv(gzip.open(tmp_path / "QQQ/2026-10-27/1005.csv.gz"))
     assert list(rows.columns) == m.FIELDS and set(rows.put_call) == {"CALL", "PUT"} and rows.occ[0] == "QQQ261027C00720000"
-    assert (tmp_path / "SPX_IDX/2026-10-27/1005.csv.gz").exists() and len(pd.read_csv(tmp_path / "capture_log.csv")) == 2
+    assert (tmp_path / "SPX_IDX/2026-10-27/1005.csv.gz").exists() and len(pd.read_csv(tmp_path / "capture_log.csv")) == 3
 
 
 def write_captures(root, m, snaps):

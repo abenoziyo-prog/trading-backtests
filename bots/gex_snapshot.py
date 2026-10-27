@@ -1,4 +1,5 @@
-"""Daily dealer-gamma (GEX) snapshot from Schwab option chains: QQQ, NDX index options and /NQ futures options.
+"""Daily dealer-gamma (GEX) snapshot from Schwab option chains: QQQ and NDX index options
+(Schwab's chains endpoint does not serve /NQ futures options).
 
     python bots/gex_snapshot.py                      # all default symbols
     python bots/gex_snapshot.py --symbols QQQ
@@ -29,7 +30,7 @@ from quant.live.schwab_feed import ReadOnlyClient, make_client  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "gex"
-SYMBOLS = ["QQQ", "$NDX", "/NQ"]
+SYMBOLS = ["QQQ", "$NDX"]  # /NQ futures options: the chains endpoint answers 400 (checked 2026-10-27)
 CHUNK_DAYS = 3  # expiry days per request: keeps each response small (the container has 256 MB)
 
 
@@ -54,7 +55,9 @@ def snapshot(client: ReadOnlyClient, symbol: str, now: datetime, days: int, stri
             if chain.get("status") == "FAILED":
                 raise ValueError(f"Schwab returned no chain for {symbol}")
             spot = spot or spot_of(chain)
-            parts.append(contracts(chain))
+            part = contracts(chain)
+            if len(part):
+                parts.append(part)
             del chain
             time.sleep(0.3)  # stay well inside Schwab's request rate limit
         a = b + timedelta(days=1)

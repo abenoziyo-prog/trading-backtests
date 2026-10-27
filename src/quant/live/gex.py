@@ -42,6 +42,8 @@ def contracts(chain: dict) -> pd.DataFrame:
                                      bid=float(o.get("bid") or np.nan), ask=float(o.get("ask") or np.nan),
                                      mark=float(o.get("mark") or np.nan), multiplier=float(o.get("multiplier") or 100)))
     t = pd.DataFrame(rows, columns=COLS)
+    num = [k for k in COLS if k not in ("put_call", "expiry")]
+    t[num] = t[num].astype(float)                               # an empty response must not turn columns into objects
     t.loc[(t.iv <= 0) | (t.iv > 500), "iv"] = np.nan          # Schwab marks missing values with -999 / NaN
     t.loc[t.gamma_schwab < 0, "gamma_schwab"] = np.nan
     return t
@@ -69,6 +71,8 @@ def gex_at(c: pd.DataFrame, spot: float, t: np.ndarray) -> np.ndarray:
 
 
 def summary(c: pd.DataFrame, spot: float, asof: datetime, symbol: str) -> dict:
+    num = [k for k in COLS if k not in ("put_call", "expiry")]
+    c = c.astype({k: float for k in num if k in c})
     c = c[(c.open_interest > 0) & c.iv.notna() & (c.strike > 0)].reset_index(drop=True)
     out = dict(asof=asof.isoformat(timespec="minutes"), symbol=symbol, spot=round(spot, 2), contracts=len(c))
     if c.empty:

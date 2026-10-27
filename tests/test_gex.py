@@ -119,3 +119,13 @@ def test_snapshot_through_read_only_client(tmp_path):
     assert {t for t, _, _ in seen} == {"CALL", "PUT"} and all((b - a).days < snap.CHUNK_DAYS for _, a, b in seen)
     assert s["net_gex"] > 0 and s["call_wall"] in (600.0, 620.0)
     assert len(list((tmp_path / "QQQ").glob("*.parquet"))) == 1
+
+
+def test_empty_chunks_keep_numeric_types():
+    """A request window with no expiries returns an empty map: it must not break the math (2026-10-27 first run)."""
+    import pandas as pd
+    asof = datetime(2026, 10, 27, 11, 37, tzinfo=NY)
+    empty = contracts(dict(symbol="QQQ", underlyingPrice=600.0, callExpDateMap={}, putExpDateMap={}))
+    assert len(empty) == 0 and empty.strike.dtype == float
+    c = pd.concat([empty, contracts(chain(call_oi={600: 1000}))], ignore_index=True)
+    assert summary(c, 600.0, asof, "QQQ")["net_gex"] > 0

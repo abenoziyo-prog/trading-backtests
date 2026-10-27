@@ -6,8 +6,8 @@ Status: **pre-registered 2026-10-27, no results yet.** Nothing here becomes a tr
 
 | Source | What | When | File |
 |---|---|---|---|
-| `bots/gex_snapshot.py` | Full chains, up to 30 days, ±60 strikes: QQQ, NDX, SPY, SPX. Net GEX, gamma flip, call/put walls, 0DTE GEX | 09:20 and 16:20 ET | `data/schwab/gex/` (`gex_daily.csv` + raw parquet) |
-| `bots/option_flow_capture.py` | Near-expiry chains (0 to 3 days, ±30 strikes) for the same four symbols. Per contract: cumulative volume, last trade (price, size, time), bid/ask, IV, greeks, OI | Every 5 min, 09:30 to 16:15 ET | `data/schwab/flow/<SYM>/<day>/<HHMM>.csv.gz` |
+| `bots/gex_snapshot.py` | Full chains, up to 30 days, ~60 strikes each side: QQQ, NDX, SPY, SPX. Net GEX, gamma flip, call/put walls, 0DTE GEX | 09:20 and 16:20 ET | `data/schwab/gex/` (`gex_daily.csv` + raw parquet) |
+| `bots/option_flow_capture.py` | Near-expiry chains (0 to 3 days, ~40 strikes each side) for the same four symbols. Per contract: cumulative volume, last trade (price, size, time), bid/ask, IV, greeks, OI | Every 5 min, 09:30 to 16:15 ET | `data/schwab/flow/<SYM>/<day>/<HHMM>.csv.gz` |
 | `bots/schwab_archiver.py` | 1-minute bars: /NQ, QQQ, /ES, SPY | Daily, 18:30 ET | `data/schwab/*_1min.parquet` |
 
 What Schwab does **not** give us, and what that means:

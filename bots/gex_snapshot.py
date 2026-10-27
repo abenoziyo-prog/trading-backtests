@@ -6,7 +6,7 @@
 
 Read-only: the only Schwab call is the option chain (ReadOnlyClient allows nothing else). Run by bots/cloud_runner.py
 at 09:20 and 16:20 ET on trading days. For each symbol it saves the raw chain (expirations up to --days ahead,
---strikes strikes each side of the money, fetched a few expiry days and one contract type per request) and one summary row (net GEX, gamma flip, call/put walls: see
+--strikes strikes around the money (Schwab counts both sides together), fetched a few expiry days and one contract type per request) and one summary row (net GEX, gamma flip, call/put walls: see
 src/quant/live/gex.py). A symbol Schwab does not serve is logged and skipped.
 Files: data/schwab/gex/<SYMBOL>/<YYYY-MM-DD_HHMM>.parquet and data/schwab/gex/gex_daily.csv.
 """
@@ -74,7 +74,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbols", nargs="+", default=SYMBOLS)
     ap.add_argument("--days", type=int, default=30, help="expirations up to this many days ahead")
-    ap.add_argument("--strikes", type=int, default=60, help="strikes on each side of the money")
+    ap.add_argument("--strikes", type=int, default=120, help="strikes around the money, both sides together (~60 each side)")
     a = ap.parse_args()
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_TOKEN_PATH") if not os.environ.get(k)]
     if missing:

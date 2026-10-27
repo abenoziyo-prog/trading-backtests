@@ -1,0 +1,160 @@
+{
+ "window": "2025-04-10 -> 2026-10-09",
+ "sessions": 375,
+ "strategies": {
+  "ASIA_BO": {
+   "book": "overnight-tactical",
+   "trades": 85,
+   "win_pct": 41.2,
+   "pf": 1.21,
+   "avg": 144.09,
+   "avg_win": 2006.39,
+   "avg_loss": -1159.51,
+   "worst_streak": 11,
+   "max_dd": -19340.0,
+   "net": 12247.84
+  },
+  "DRIFT": {
+   "book": "overnight-drift",
+   "trades": 374,
+   "win_pct": 42.0,
+   "pf": 1.37,
+   "avg": 348.25,
+   "avg_win": 3061.93,
+   "avg_loss": -1615.1,
+   "worst_streak": 8,
+   "max_dd": -38063.0,
+   "net": 130247.28
+  },
+  "EU_PRE": {
+   "book": "overnight-tactical",
+   "trades": 373,
+   "win_pct": 51.7,
+   "pf": 1.36,
+   "avg": 156.55,
+   "avg_win": 1135.9,
+   "avg_loss": -893.54,
+   "worst_streak": 8,
+   "max_dd": -10919.92,
+   "net": 58392.08
+  },
+  "GF-1": {
+   "book": "US",
+   "trades": 103,
+   "win_pct": 66.0,
+   "pf": 1.84,
+   "avg": 637.1,
+   "avg_win": 2114.08,
+   "avg_loss": -2232.48,
+   "worst_streak": 3,
+   "max_dd": -16832.52,
+   "net": 65620.88
+  },
+  "L2": {
+   "book": "US",
+   "trades": 111,
+   "win_pct": 54.1,
+   "pf": 1.82,
+   "avg": 375.35,
+   "avg_win": 1539.22,
+   "avg_loss": -993.91,
+   "worst_streak": 5,
+   "max_dd": -5186.1,
+   "net": 41663.87
+  },
+  "LONDON": {
+   "book": "overnight-tactical",
+   "trades": 16,
+   "win_pct": 25.0,
+   "pf": 1.51,
+   "avg": 181.53,
+   "avg_win": 2146.84,
+   "avg_loss": -473.57,
+   "worst_streak": 5,
+   "max_dd": -2634.05,
+   "net": 2904.51
+  },
+  "ORB-C": {
+   "book": "US",
+   "trades": 165,
+   "win_pct": 58.8,
+   "pf": 1.41,
+   "avg": 361.11,
+   "avg_win": 2109.17,
+   "avg_loss": -2132.44,
+   "worst_streak": 4,
+   "max_dd": -20743.26,
+   "net": 59583.68
+  },
+  "S3": {
+   "book": "US",
+   "trades": 267,
+   "win_pct": 53.9,
+   "pf": 1.2,
+   "avg": 136.69,
+   "avg_win": 1493.13,
+   "avg_loss": -1451.33,
+   "worst_streak": 7,
+   "max_dd": -21560.11,
+   "net": 36496.73
+  },
+  "TOKYO": {
+   "book": "overnight-tactical",
+   "trades": 374,
+   "win_pct": 34.0,
+   "pf": 1.33,
+   "avg": 102.19,
+   "avg_win": 1218.42,
+   "avg_loss": -471.73,
+   "worst_streak": 13,
+   "max_dd": -16015.51,
+   "net": 38220.88
+  }
+ },
+ "books": {
+  "US": {
+   "trades": 646,
+   "win_pct": 57.1,
+   "pf": 1.45,
+   "avg": 314.81,
+   "avg_win": 1777.0,
+   "avg_loss": -1633.02,
+   "worst_streak": 6,
+   "max_dd": -28725.81,
+   "net": 203365.16
+  },
+  "overnight-drift": {
+   "trades": 374,
+   "win_pct": 42.0,
+   "pf": 1.37,
+   "avg": 348.25,
+   "avg_win": 3061.93,
+   "avg_loss": -1615.1,
+   "worst_streak": 8,
+   "max_dd": -38063.0,
+   "net": 130247.28
+  },
+  "overnight-tactical": {
+   "trades": 848,
+   "win_pct": 42.3,
+   "pf": 1.33,
+   "avg": 131.8,
+   "avg_win": 1261.22,
+   "avg_loss": -697.37,
+   "worst_streak": 16,
+   "max_dd": -19127.99,
+   "net": 111765.31
+  }
+ },
+ "total": {
+  "trades": 1868,
+  "win_pct": 47.4,
+  "pf": 1.39,
+  "avg": 238.42,
+  "avg_win": 1795.72,
+  "avg_loss": -1163.62,
+  "worst_streak": 15,
+  "max_dd": -38566.45,
+  "net": 445377.75
+ }
+}

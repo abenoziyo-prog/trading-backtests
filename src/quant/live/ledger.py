@@ -5,8 +5,13 @@ restarts never duplicate or lose rows."""
 from __future__ import annotations
 
 import csv
+import logging
 from datetime import date
 from pathlib import Path
+
+from quant.live.status import write_status
+
+log = logging.getLogger("nqbot.ledger")
 
 TRADE_FIELDS = ["day", "strategy", "side", "taken", "skip_reason", "signal_time", "entry_time", "entry", "stop", "target",
                 "exit_time", "exit", "exit_reason", "pnl_pts", "pnl_usd", "r_multiple", "book"]
@@ -125,4 +130,8 @@ class Ledger:
             w.writerow(dict(date=d, strategy="TOTAL", side=f"{len(rows)} trades",
                             exit_reason=f"{sum(p > 0 for p in pnl)}W / {sum(p <= 0 for p in pnl)}L",
                             pnl_points=round(sum(float(r["pnl_pts"]) for r in rows), 2), pnl_usd=round(sum(pnl), 2)))
+        try:  # the report must never stop the bot
+            write_status(self.dir)
+        except Exception:
+            log.exception("status.md not written")
         return path

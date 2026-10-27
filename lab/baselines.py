@@ -15,22 +15,20 @@ from quant.live.engine import LIVE_EXITS, PRIORITY, Bar
 from quant.live.overnight import TACTICAL, NightEngine, NightLevels
 from quant.live.replay import replay
 
-from .data import Context
 
 ORDER = {"us": PRIORITY, "overnight": TACTICAL, "drift": ["DRIFT"]}
 COLS = ["cand", "day", "side", "entry_time", "exit_time", "pnl_usd", "r_multiple"]
 
 
-def us(ctx: Context) -> pd.DataFrame:
+def us(ctx) -> pd.DataFrame:
     if not hasattr(ctx, "_us_trades"):
-        rth = ctx.us.lr.rth_minutes("NSX")
         rows = [(t.strategy, pd.Timestamp(e.day.date()), t.side, t.entry_time, t.exit_time, t.pnl_usd, t.r_multiple)
-                for e, _ in replay(rth, ctx.levels, exits=LIVE_EXITS) for t in e.trades]
+                for e, _ in replay(ctx.rth, ctx.levels, exits=LIVE_EXITS) for t in e.trades]
         ctx._us_trades = _frame(rows)
     return ctx._us_trades
 
 
-def _nights(ctx: Context) -> pd.DataFrame:
+def _nights(ctx) -> pd.DataFrame:
     if not hasattr(ctx, "_night_trades"):  # one replay serves both overnight baselines and the ideas built on them
         rows = []
         for n in ctx.nights:
@@ -44,12 +42,12 @@ def _nights(ctx: Context) -> pd.DataFrame:
     return ctx._night_trades
 
 
-def overnight(ctx: Context) -> pd.DataFrame:
+def overnight(ctx) -> pd.DataFrame:
     t = _nights(ctx)
     return t[t.cand != "DRIFT"].reset_index(drop=True)
 
 
-def drift(ctx: Context) -> pd.DataFrame:
+def drift(ctx) -> pd.DataFrame:
     t = _nights(ctx)
     return t[t.cand == "DRIFT"].reset_index(drop=True)
 

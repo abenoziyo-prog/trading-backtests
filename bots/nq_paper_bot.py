@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -31,6 +32,7 @@ from quant.live.calendar import Calendar  # noqa: E402
 from quant.live.engine import LIVE_EXITS, Bar, DayEngine  # noqa: E402
 from quant.live.ledger import Ledger  # noqa: E402
 from quant.live.overnight import NightEngine, NightLevels, night_start  # noqa: E402
+from quant.live.status import write_status  # noqa: E402
 from quant.live.store import BarStore  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
@@ -52,6 +54,27 @@ class Bot:
         self.no_trade_day: date | None = None
         self.last_bar_wall = time.time()
         self.quiet = False  # True while back-filling missed minutes: events are logged, not alerted
+        self.shadow = None  # shadow book (lab ideas on paper, apart from the live books); live mode only
+        self._shadow_pool: ThreadPoolExecutor | None = None
+
+    def enable_shadow(self) -> None:
+        from quant.live.shadow import ShadowBook
+        self.shadow = ShadowBook(self.state, self.cal, ROOT / "data" / "schwab" / "NQ_1min.parquet")
+        self._shadow_pool = ThreadPoolExecutor(max_workers=1)  # off the bar loop: it must never delay a live bar
+        log.info("shadow book: %d ideas (%s)", len(self.shadow.ideas), ", ".join(m.NAME for m in self.shadow.ideas))
+
+    def shadow_run(self, fn: str, *args) -> None:
+        if self.shadow is None:
+            return
+
+        def job() -> None:
+            try:
+                n = getattr(self.shadow, fn)(*args)
+                log.info("shadow book %s%s: %d trades", fn, args, n)
+                write_status(self.ledger.dir)
+            except Exception:
+                log.exception("shadow book %s%s failed", fn, args)
+        self._shadow_pool.submit(job)
 
     def on_bar(self, bar: Bar) -> None:
         self.last_bar_wall = time.time()
@@ -143,6 +166,7 @@ class Bot:
         for ev in self.engine.close_day():
             self.alerter.event(ev, self.symbol)
         row = self.ledger.close_day(self.engine, self.levels_note)
+        self.shadow_run("close", self.engine.day.date(), "us")
         self.alerter.send(f"NQ bot day summary {row['day']}",
                           f"{row['trades_taken']} trades ({row['wins']}W/{row['losses']}L), net ${float(row['net_pnl_usd']):,.0f}, "
                           f"cumulative ${float(row['cum_pnl_usd']):,.0f}", "low")
@@ -209,6 +233,7 @@ class Bot:
         for ev in self.night.close():
             self._emit(ev, None)
         path = self.ledger.close_night(self.night)
+        self.shadow_run("close", self.night_day, "overnight")
         taken = [t for t in self.night.trades if t.taken and t.pnl_usd is not None]
         self.alerter.send(f"NQ bot night summary (session {self.night_day})",
                           f"{len(taken)} trades, net ${sum(t.pnl_usd for t in taken):,.0f} -> {path.name}", "low")
@@ -287,6 +312,7 @@ async def run_live(bot: Bot, env: dict) -> None:
             since = min(now - timedelta(hours=20), datetime(prev.year, prev.month, prev.day, 9, 0, tzinfo=NY))
             missed = history_bars(client, bot.symbol, since, now)
             bot.backfill(missed)
+            bot.shadow_run("catch_up", now.date())
             if missed:
                 agg.last_final = max(agg.last_final or missed[-1].t, missed[-1].t)
             hours = refresh_token_hours_left(client)
@@ -352,6 +378,10 @@ def main() -> None:
     if missing:
         sys.exit(f"missing environment variables: {', '.join(missing)} (see deploy/nq_paper_bot.env.example)")
     log.info("NQ paper bot starting: %s, state %s, alerts: %s", a.symbol, state, ", ".join(alerter.channels) or "log only")
+    try:
+        bot.enable_shadow()
+    except Exception:  # the shadow book is optional: the live books run without it
+        log.exception("shadow book disabled")
     asyncio.run(run_live(bot, dict(os.environ)))
 
 

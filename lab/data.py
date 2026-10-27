@@ -3,6 +3,7 @@
   ctx.us_days     US sessions, last 18 months: dicts with day, R0, t (bar times), mod (minute of day), o/h/l/c arrays
   ctx.nights      nights (D-1 18:00 -> D 09:29 ET): dicts with day, t0, rel (minutes after 18:00), t, o/h/l/c,
                   PDH/PDL/PDC/R0, prev_open, vix
+  ctx.rth         US-session 1-minute bars (DataFrame, NY time)
   ctx.levels      daily PDH/PDL/PDC/Asia/London levels per US session (DataFrame indexed by day)
   ctx.features    day conditions known at 09:30 (gap_R, overnight_R, open_loc, prior, vix + boolean gates)
   ctx.us          helper module for US-session ideas (scripts/open_orb.py: or_end, candles_after, exit_trade,
@@ -42,6 +43,10 @@ class Context:
     @cached_property
     def night(self):
         return load_script("lab_overnight_strategies", "overnight_strategies.py")
+
+    @cached_property
+    def rth(self) -> pd.DataFrame:
+        return self.us.lr.rth_minutes("NSX")
 
     @cached_property
     def us_days(self) -> list[dict]:

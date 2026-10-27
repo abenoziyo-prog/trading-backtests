@@ -18,6 +18,8 @@ from zoneinfo import ZoneInfo
 
 NY = ZoneInfo("America/New_York")
 BASELINE = Path(__file__).with_name("baseline.json")
+SHADOW_BASELINE = Path(__file__).with_name("shadow_baseline.json")
+SHADOW_LOG_ROWS = 40
 DD_MULT, STREAK_ADD, WATCH_AT, REVIEW_TRADES = 1.5, 3, 0.5, 30
 ORDER = ["GF-1", "ORB-C", "S3", "L2", "DRIFT", "TOKYO", "EU_PRE", "LONDON", "ASIA_BO"]
 SESSION_OF = {"DRIFT": "Overnight", "TOKYO": "Asia", "ASIA_BO": "Asia", "EU_PRE": "London", "LONDON": "London"}
@@ -132,7 +134,40 @@ def build(trades_csv: Path, baseline: dict | None = None, now: datetime | None =
     return "\n".join(out) + "\n"
 
 
+def shadow_section(shadow_csv: Path, baseline: dict | None = None) -> str:
+    """Shadow book: lab ideas paper-traded apart from the live books (not in the P&L above)."""
+    base = baseline if baseline is not None else (json.loads(SHADOW_BASELINE.read_text()) if SHADOW_BASELINE.exists() else {})
+    rows = []
+    if shadow_csv.exists():
+        with shadow_csv.open() as f:
+            rows = sorted(csv.DictReader(f), key=lambda r: r["entry_time"])
+    pnl = [float(r["pnl_usd"]) for r in rows]
+    wins = sum(p > 0 for p in pnl)
+    out = ["", "## Shadow book (lab ideas, paper, NOT in the P&L above)", "",
+           "Every lab idea, run with its own lab code on the bot's /NQ bars at each session close. Each idea trades "
+           "on its own (no shared position slot). Lab verdicts are from the 18-month backtest gates.", "",
+           f"**Shadow total {money(sum(pnl))}** over {len(rows)} trades ({wins} W / {len(rows) - wins} L).", ""]
+    names = sorted(set(base) | {r["idea"] for r in rows})
+    trows = []
+    for name in names:
+        p, b = [float(r["pnl_usd"]) for r in rows if r["idea"] == name], base.get(name)
+        n = len(p)
+        trows.append([name, b["session"] if b else "–", b["verdict"] if b else "–", n,
+                      f"{sum(x > 0 for x in p)} / {sum(x <= 0 for x in p)}" if n else "–", money(sum(p)) if n else "–",
+                      f"{100 * sum(x > 0 for x in p) / n:.0f}%" if n else "–", f"{b['win_pct']:.0f}%" if b else "–",
+                      f"{b['pf']:.2f}" if b else "–", money(b["avg"] * n) if b and n else "–"])
+    out += table(["Idea", "Session", "Lab verdict", "Trades", "W / L", "Net", "Live win %", "Backtest win %", "Backtest PF",
+                  "Expected net"], trows)
+    if rows:
+        out += ["", f"Last {min(SHADOW_LOG_ROWS, len(rows))} shadow trades:", ""]
+        out += table(["Date", "Idea", "Side", "Duration", "Result", "Net"],
+                     [[f"{datetime.fromisoformat(r['day']):%a %m-%d}", r["idea"], r["side"].capitalize(),
+                       duration(r["entry_time"], r["exit_time"]), "✅ Winner" if float(r["pnl_usd"]) > 0 else "❌ Loser",
+                       money(float(r["pnl_usd"]))] for r in rows[-SHADOW_LOG_ROWS:]])
+    return "\n".join(out) + "\n"
+
+
 def write_status(ledger_dir: Path, now: datetime | None = None) -> Path:
     path = ledger_dir / "status.md"
-    path.write_text(build(ledger_dir / "trades.csv", now=now))
+    path.write_text(build(ledger_dir / "trades.csv", now=now) + shadow_section(ledger_dir / "shadow_trades.csv"))
     return path

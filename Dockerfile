@@ -14,6 +14,9 @@ COPY src/quant/__init__.py src/quant/
 COPY src/quant/live/ src/quant/live/
 COPY bots/nq_paper_bot.py bots/schwab_login.py bots/schwab_archiver.py bots/seed_levels.py bots/list_accounts.py bots/cloud_runner.py bots/
 COPY scripts/stream_audit_report.py scripts/
+# shadow book: the lab's ideas run on the bot's bars (lab/ and ideas/ hold code only, no data)
+COPY lab/ lab/
+COPY ideas/ ideas/
 RUN mkdir -p state/nqbot data/schwab && chown -R bot:bot /app
 USER bot
 

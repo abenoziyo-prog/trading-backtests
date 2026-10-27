@@ -9,7 +9,8 @@ sandbox). Keeps the bot's files in a database instead of a volume.
      platform restarts the container)
   4. every SYNC_S seconds: save changed files back to the database (the token refresh, bars, ledger, audit)
   5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ and QQQ 1-minute history), then save
-  6. on SIGTERM (redeploy/stop): stop the bot, final save, exit
+  6. trading days 09:20 and 15:50 ET: run bots/gex_snapshot.py (option chains -> dealer gamma), then save
+  7. on SIGTERM (redeploy/stop): stop the bot, final save, exit
 Database: STATE_DB_URL = postgresql://... or sqlite:///path (local testing); if unset, POSTGRES_URI / DATABASE_URL
 (as injected by a linked Northflank PostgreSQL add-on, e.g. NF_NQBOT_DB_POSTGRES_URI) is used.
 One table, nqbot_files(path, sha256, data, updated). Read-only towards Schwab: this file has no Schwab calls.
@@ -24,12 +25,14 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 NY = ZoneInfo("America/New_York")
+GEX_SLOTS = [(9, 20), (15, 50)]  # before the open (fresh open interest) and before the close (same-day positioning)
 SYNC_DIRS = ["state/nqbot", "data/schwab"]
 SKIP = {".tmp"}  # half-written files are never saved
 log = logging.getLogger("runner")
@@ -111,6 +114,18 @@ def archive_due(now: datetime, last_day: str | None) -> bool:
     return now.weekday() < 6 and (now.hour, now.minute) >= (18, 30) and last_day != now.date().isoformat()
 
 
+def gex_due(now: datetime, done: set[str], cal) -> str | None:
+    """The GEX slot to run now (once per trading day and slot, within 2 hours of its time), or None."""
+    if not cal.is_trading_day(now.date()):
+        return None
+    for h, m in GEX_SLOTS:
+        start = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        key = f"{now.date()} {h:02d}:{m:02d}"
+        if start <= now < start + timedelta(hours=2) and key not in done:
+            return key
+    return None
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     env = os.environ
@@ -137,6 +152,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     sync_s, bot, fails, last_arch = float(env.get("SYNC_S", 60)), None, [], None
+    from quant.live.calendar import Calendar
+    cal, gex_done = Calendar(), set()
     next_sync = 0.0
     while not stopping:
         if bot is None or bot.poll() is not None:
@@ -154,6 +171,15 @@ def main() -> None:
             last_arch = now.date().isoformat()
             r = subprocess.run([sys.executable, str(ROOT / "bots" / "schwab_archiver.py")], cwd=ROOT)
             log.info("archiver finished with code %d", r.returncode)
+            next_sync = 0
+        slot = gex_due(now, gex_done, cal)
+        if slot:
+            gex_done.add(slot)
+            try:
+                r = subprocess.run([sys.executable, str(ROOT / "bots" / "gex_snapshot.py")], cwd=ROOT, timeout=300)
+                log.info("GEX snapshot %s finished with code %d", slot, r.returncode)
+            except subprocess.TimeoutExpired:
+                log.warning("GEX snapshot %s timed out", slot)
             next_sync = 0
         if time.time() >= next_sync:
             n = sync.save()

@@ -26,10 +26,12 @@ class ReadOnlyClient:
 
     ALLOWED = frozenset({"get_user_preferences", "token_metadata", "token_age"})
     PRICE_HISTORY = frozenset({"get_price_history_every_minute"})  # extra market-data call for the archiver
+    OPTION_CHAIN = frozenset({"get_option_chain"})  # extra market-data call for the GEX snapshot (bots/gex_snapshot.py)
+    MARKET_DATA = PRICE_HISTORY | OPTION_CHAIN  # the only extras a caller can ask for: quotes and history, never trading
 
     def __init__(self, client, extra: frozenset = frozenset()):
         object.__setattr__(self, "_c", client)
-        object.__setattr__(self, "_allowed", ReadOnlyClient.ALLOWED | (extra & ReadOnlyClient.PRICE_HISTORY))
+        object.__setattr__(self, "_allowed", ReadOnlyClient.ALLOWED | (extra & ReadOnlyClient.MARKET_DATA))
 
     def __getattr__(self, name):
         if name not in object.__getattribute__(self, "_allowed"):

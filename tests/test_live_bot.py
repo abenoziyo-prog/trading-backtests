@@ -100,7 +100,7 @@ def test_no_order_code_in_live_bot():
     """The bot is data-only: no order endpoints or order builders anywhere in its code."""
     files = list((ROOT / "src/quant/live").glob("*.py")) + [ROOT / "bots/nq_paper_bot.py", ROOT / "bots/schwab_login.py",
                                                        ROOT / "bots/schwab_archiver.py", ROOT / "bots/seed_levels.py",
-                                                       ROOT / "bots/cloud_runner.py"]
+                                                       ROOT / "bots/cloud_runner.py", ROOT / "bots/gex_snapshot.py"]
     banned = re.compile(r"place_order|replace_order|cancel_order|schwab\.orders|OrderBuilder|equity_buy|equity_sell|"
                         r"futures_buy|order_spec|preview_order")
     for f in files:

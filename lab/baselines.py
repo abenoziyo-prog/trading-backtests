@@ -2,6 +2,7 @@
 
   us         system R: GF-1, ORB-C, S3, L2 with the live exit rules (quant.live.engine.LIVE_EXITS)
   overnight  the overnight tactical book: TOKYO, EU_PRE, LONDON, ASIA_BO (quant.live.overnight)
+  drift      the overnight drift book (DRIFT alone), for ideas that replace it
 Returns every shadow trade (taken or not) so an idea can be added to the one-position picker at the lowest priority.
 """
 from __future__ import annotations
@@ -16,28 +17,41 @@ from quant.live.replay import replay
 
 from .data import Context
 
-ORDER = {"us": PRIORITY, "overnight": TACTICAL}
+ORDER = {"us": PRIORITY, "overnight": TACTICAL, "drift": ["DRIFT"]}
 COLS = ["cand", "day", "side", "entry_time", "exit_time", "pnl_usd", "r_multiple"]
 
 
 def us(ctx: Context) -> pd.DataFrame:
-    rth = ctx.us.lr.rth_minutes("NSX")
-    rows = [(t.strategy, pd.Timestamp(e.day.date()), t.side, t.entry_time, t.exit_time, t.pnl_usd, t.r_multiple)
-            for e, _ in replay(rth, ctx.levels, exits=LIVE_EXITS) for t in e.trades]
-    return _frame(rows)
+    if not hasattr(ctx, "_us_trades"):
+        rth = ctx.us.lr.rth_minutes("NSX")
+        rows = [(t.strategy, pd.Timestamp(e.day.date()), t.side, t.entry_time, t.exit_time, t.pnl_usd, t.r_multiple)
+                for e, _ in replay(rth, ctx.levels, exits=LIVE_EXITS) for t in e.trades]
+        ctx._us_trades = _frame(rows)
+    return ctx._us_trades
+
+
+def _nights(ctx: Context) -> pd.DataFrame:
+    if not hasattr(ctx, "_night_trades"):  # one replay serves both overnight baselines and the ideas built on them
+        rows = []
+        for n in ctx.nights:
+            d = n["day"].to_pydatetime()
+            eng = NightEngine(datetime(d.year, d.month, d.day), NightLevels(n["PDH"], n["PDL"], n["PDC"]), t0=n["t0"].to_pydatetime())
+            for t, o, h, l, c in zip(n["t"], n["o"], n["h"], n["l"], n["c"]):
+                eng.on_bar(Bar(t.to_pydatetime(), float(o), float(h), float(l), float(c)))
+            eng.close()
+            rows += [(t.strategy, n["day"], t.side, t.entry_time, t.exit_time, t.pnl_usd, t.r_multiple) for t in eng.trades]
+        ctx._night_trades = _frame(rows)
+    return ctx._night_trades
 
 
 def overnight(ctx: Context) -> pd.DataFrame:
-    rows = []
-    for n in ctx.nights:
-        d = n["day"].to_pydatetime()
-        eng = NightEngine(datetime(d.year, d.month, d.day), NightLevels(n["PDH"], n["PDL"], n["PDC"]), t0=n["t0"].to_pydatetime())
-        for t, o, h, l, c in zip(n["t"], n["o"], n["h"], n["l"], n["c"]):
-            eng.on_bar(Bar(t.to_pydatetime(), float(o), float(h), float(l), float(c)))
-        eng.close()
-        rows += [(t.strategy, n["day"], t.side, t.entry_time, t.exit_time, t.pnl_usd, t.r_multiple)
-                 for t in eng.trades if t.strategy != "DRIFT"]
-    return _frame(rows)
+    t = _nights(ctx)
+    return t[t.cand != "DRIFT"].reset_index(drop=True)
+
+
+def drift(ctx: Context) -> pd.DataFrame:
+    t = _nights(ctx)
+    return t[t.cand == "DRIFT"].reset_index(drop=True)
 
 
 def _frame(rows) -> pd.DataFrame:

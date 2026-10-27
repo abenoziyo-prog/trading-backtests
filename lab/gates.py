@@ -8,7 +8,12 @@
   G4 add-on       added to the live baseline at the lowest priority (one position at a time), it raises net P&L in
                   BOTH the first 12 and the last 6 months, without deepening the max drawdown by more than 20%
   G5 robustness   (only if the idea lists NEIGHBORS) >= 60% of its neighbouring parameter sets pass G3
-PASS = all applicable gates. A PASS makes an idea a candidate for shadow trading, not for live trading.
+  G4 replace      (ideas with REPLACES = a live strategy, instead of G4 add-on) the live book with the idea in that
+                  strategy's place, in BOTH the first 12 and the last 6 months: net P&L no more than 5% lower, and
+                  net P&L / max drawdown at least as good
+PASS = all applicable gates. NEAR = every gate passes except G2, with profit factor > 1.3 in both the first 12 and the
+last 6 months (an edge that is consistent but not yet significant). PASS and NEAR ideas are candidates for the
+shadow book (paper, kept apart from the live books), never directly for live trading.
 """
 from __future__ import annotations
 
@@ -78,7 +83,26 @@ def consistency(t: pd.DataFrame) -> tuple[bool, dict]:
     return ok, dict(pf_first12=pf(a.pnl_usd.to_numpy()), pf_last6=pf(b.pnl_usd.to_numpy()), positive_blocks=pos, blocks=bl)
 
 
-def evaluate(idea: pd.DataFrame, base: pd.DataFrame, order: list[str], n_tested: int, neighbors: list[pd.DataFrame] | None = None) -> dict:
+def replace_gate(base_taken: pd.DataFrame, new_taken: pd.DataFrame) -> tuple[bool, dict]:
+    out, ok = {}, True
+    for name, a, b in zip(("first12", "last6"), halves(base_taken), halves(new_taken)):
+        na, nb = a.pnl_usd.sum(), b.pnl_usd.sum()
+        da, db = stats(a)["maxdd"], stats(b)["maxdd"]
+        ra, rb = na / abs(da) if da else math.inf, nb / abs(db) if db else math.inf
+        ok &= bool(nb >= na - 0.05 * abs(na) and rb >= ra)
+        out[name] = dict(base_net=float(na), new_net=float(nb), base_ret_dd=float(ra), new_ret_dd=float(rb))
+    return ok, out
+
+
+def verdict(gates: dict, cons: dict) -> str:
+    if all(gates.values()):
+        return "PASS"
+    failed = {k for k, v in gates.items() if not v}
+    return "NEAR" if failed == {"G2_edge"} and cons["pf_first12"] > 1.3 and cons["pf_last6"] > 1.3 else "FAIL"
+
+
+def evaluate(idea: pd.DataFrame, base: pd.DataFrame, order: list[str], n_tested: int, neighbors: list[pd.DataFrame] | None = None,
+             replaces: str | None = None) -> dict:
     s = stats(idea)
     _, last6 = halves(idea)
     g1 = s["trades"] >= 30 and len(last6) >= 10
@@ -86,19 +110,28 @@ def evaluate(idea: pd.DataFrame, base: pd.DataFrame, order: list[str], n_tested:
     g2 = s["trades"] > 2 and s["pf"] >= 1.15 and s["t"] >= t_req
     g3, cons = consistency(idea)
     base_taken = picker(base, order)
-    both = picker(pd.concat([base, idea.assign(cand="IDEA")], ignore_index=True), order + ["IDEA"])
+    if replaces:
+        both = picker(pd.concat([base[base.cand != replaces], idea.assign(cand=replaces)], ignore_index=True), order)
+        both = both.assign(cand=both.cand.where(both.cand != replaces, "IDEA"))
+    else:
+        both = picker(pd.concat([base, idea.assign(cand="IDEA")], ignore_index=True), order + ["IDEA"])
     ba, bb = halves(base_taken)
     wa, wb = halves(both)
     gain_a, gain_b = wa.pnl_usd.sum() - ba.pnl_usd.sum(), wb.pnl_usd.sum() - bb.pnl_usd.sum()
     dd_base, dd_with = stats(base_taken)["maxdd"], stats(both)["maxdd"]
-    g4 = gain_a > 0 and gain_b > 0 and dd_with >= 1.2 * dd_base
-    gates = dict(G1_sample=g1, G2_edge=g2, G3_consistency=g3, G4_addon=g4)
+    replace = None
+    if replaces:
+        g4, replace = replace_gate(base_taken, both)
+        gates = dict(G1_sample=g1, G2_edge=g2, G3_consistency=g3, G4_replace=g4)
+    else:
+        g4 = gain_a > 0 and gain_b > 0 and dd_with >= 1.2 * dd_base
+        gates = dict(G1_sample=g1, G2_edge=g2, G3_consistency=g3, G4_addon=g4)
     nb = None
     if neighbors:
         passed = [consistency(x)[0] for x in neighbors]
         nb = dict(n=len(passed), passed=sum(passed))
         gates["G5_robustness"] = sum(passed) >= 0.6 * len(passed)
-    return dict(stats=s, t_required=t_req, consistency=cons, gates=gates, verdict="PASS" if all(gates.values()) else "FAIL",
+    return dict(stats=s, t_required=t_req, consistency=cons, gates=gates, verdict=verdict(gates, cons), replace=replace,
                 addon=dict(gain_first12=float(gain_a), gain_last6=float(gain_b), base_net=float(base_taken.pnl_usd.sum()),
                            with_net=float(both.pnl_usd.sum()), base_maxdd=dd_base, with_maxdd=dd_with,
                            idea_trades_taken=int((both.cand == "IDEA").sum())),

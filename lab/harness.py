@@ -11,6 +11,9 @@ An idea is a Python file in ideas/ defining:
     trades(ctx, **params) -> DataFrame with columns day, side, entry_time, exit_time, pnl_usd, r_multiple
     PARAMS      optional dict of default parameters passed to trades()
     NEIGHBORS   optional list of parameter dicts (nearby settings) for the robustness gate
+    REPLACES    optional: a live strategy the idea would replace (gate G4 replace instead of G4 add-on)
+    BASELINE    optional: the baseline to use ("us", "overnight" or "drift"; default = SESSION)
+Ideas evaluated in one run count together for the luck correction: each faces the bar of the whole batch.
 Outputs (in --out, default lab_results/): <name>.json and <name>.md per idea, registry.csv (append-only record of
 every evaluation; its idea count sets the luck correction in gate G2), leaderboard.md (latest result per idea).
 """
@@ -67,6 +70,9 @@ def report(m, r: dict) -> str:
     gates = "\n".join(f"| {k} | {'✅ pass' if v else '❌ fail'} |" for k, v in r["gates"].items())
     blk = " | ".join(fmt(x, money=True) for x in c["blocks"])
     heads = " | ".join(f"{b:%b %y}" for b in BLOCKS)
+    rp = "" if not r.get("replace") else "\n**Replacing " + m.REPLACES + " in the live book:**\n" + "\n".join(
+        f"- {k}: net {fmt(v['base_net'], money=True)} → {fmt(v['new_net'], money=True)}; net / max drawdown "
+        f"{fmt(v['base_ret_dd'])} → {fmt(v['new_ret_dd'])}." for k, v in r["replace"].items()) + "\n"
     nb = "" if not r["neighbors"] else f"\n**Neighbours:** {r['neighbors']['passed']} of {r['neighbors']['n']} pass G3.\n"
     return f"""# {m.NAME}: **{r['verdict']}**
 
@@ -77,7 +83,7 @@ def report(m, r: dict) -> str:
 | Gate | Result |
 |---|---|
 {gates}
-{nb}
+{nb}{rp}
 | Metric | Value |
 |---|---|
 | Trades (18 months) | {s['trades']} |
@@ -122,14 +128,16 @@ def main() -> None:
         return
     ctx = Context()
     base = {}
+    n_batch = len(set(reg.idea) | {m.NAME for m in ideas})
     for m in ideas:
-        if m.SESSION not in base:
-            base[m.SESSION] = getattr(baselines, m.SESSION)(ctx)
+        bname = getattr(m, "BASELINE", m.SESSION)
+        if bname not in base:
+            base[bname] = getattr(baselines, bname)(ctx)
         params = dict(getattr(m, "PARAMS", {}))
         trades = normalize(m.trades(ctx, **params))
         neighbors = [normalize(m.trades(ctx, **{**params, **nb})) for nb in getattr(m, "NEIGHBORS", [])]
-        n_tested = len(set(reg.idea) | {m.NAME})
-        r = evaluate(trades, base[m.SESSION], list(baselines.ORDER[m.SESSION]), n_tested, neighbors)
+        n_tested = n_batch
+        r = evaluate(trades, base[bname], list(baselines.ORDER[bname]), n_tested, neighbors, getattr(m, "REPLACES", None))
         r["evaluated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         (out / f"{m.NAME}.json").write_text(json.dumps(r, indent=2, default=str))
         (out / f"{m.NAME}.md").write_text(report(m, r))
@@ -142,7 +150,7 @@ def main() -> None:
         print(f"{m.NAME:32s} {r['verdict']}  " + "  ".join(f"{k.split('_')[0]}:{'ok' if v else 'x'}" for k, v in r["gates"].items()))
     reg.to_csv(reg_path, index=False)
     latest = reg.drop_duplicates("idea", keep="last").sort_values(["verdict", "addon_gain_last6"], ascending=[False, False])
-    lines = ["# Strategy lab leaderboard", "", f"{len(latest)} ideas tested. PASS = candidate for shadow trading.", "",
+    lines = ["# Strategy lab leaderboard", "", f"{len(latest)} ideas tested. PASS or NEAR = candidate for the shadow book.", "",
              "| Idea | Session | Verdict | Trades | PF | PF first 12m / last 6m | Blocks + | Add-on gain first 12m / last 6m | Evaluated |",
              "|---|---|---|---|---|---|---|---|---|"]
     for r in latest.itertuples():

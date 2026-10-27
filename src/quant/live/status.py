@@ -1,7 +1,7 @@
 """Daily status report: <ledger dir>/status.md, rebuilt from trades.csv each time a session's night or US day closes.
 
 Sections: totals, P&L by book and by session, per-strategy live vs backtest (baseline.json, made by
-scripts/make_live_baseline.py), kill-switch distance, the full trade log, P&L by GEX regime and VIX state at entry (gex_tags.py, vix_tags.py)
+scripts/make_live_baseline.py), kill-switch distance, the full trade log, P&L by GEX regime, VIX state and expected move at entry (gex_tags.py, vix_tags.py, em_tags.py)
 and the shadow book. The kill switch is a report only:
 the bot never pauses a strategy on its own.
 
@@ -173,11 +173,11 @@ STATE_NOTE = ("Recording only: no strategy uses these yet. The tests that decide
 
 
 def tagged_trades(ledger_dir: Path, schwab_dir: Path | None = None, **gex_dirs) -> dict:
-    """Live and shadow trades with the GEX and VIX state at entry (quant.live.gex_tags / vix_tags), also written to
+    """Live and shadow trades with the GEX, VIX and expected-move state at entry (gex_tags, vix_tags, em_tags), written to
     ledger/trades_tagged.csv and ledger/shadow_trades_tagged.csv."""
     import pandas as pd
 
-    from quant.live import gex_tags, vix_tags
+    from quant.live import em_tags, gex_tags, vix_tags
     schwab_dir = schwab_dir or gex_tags.ROOT / "data" / "schwab"
     out = {}
     for name, src, dst in (("Live books", "trades.csv", "trades_tagged.csv"), ("Shadow book", "shadow_trades.csv", "shadow_trades_tagged.csv")):
@@ -190,19 +190,24 @@ def tagged_trades(ledger_dir: Path, schwab_dir: Path | None = None, **gex_dirs) 
             continue
         g = gex_tags.tag(t.reset_index(drop=True), ledger_dir.parent, **gex_dirs)
         g = vix_tags.tag(g, ledger_dir.parent, schwab_dir)
+        g = em_tags.tag(g, ledger_dir.parent, schwab_dir)
         g.to_csv(ledger_dir / dst, index=False)
         out[name] = g
     return out
 
 
 def state_sections(ledger_dir: Path, schwab_dir: Path | None = None, **gex_dirs) -> str:
-    """P&L by GEX regime and by VIX state at entry, live and shadow. Never stops the report: a failure becomes a note."""
+    """P&L by GEX regime, VIX state and expected-move context at entry, live and shadow. Never stops the report: a failure becomes a note."""
     try:
-        from quant.live import gex_tags, vix_tags
+        from quant.live import em_tags, gex_tags, vix_tags
         tagged = tagged_trades(ledger_dir, schwab_dir, **gex_dirs)
         out = []
         for head, extra, splits in (("## P&L by GEX regime (state at entry)", "Regimes use the naive sign (calls +, puts −).", gex_tags.SPLITS),
-                                    ("## P&L by VIX state at entry", "Definitions: src/quant/live/vix_tags.py.", vix_tags.SPLITS)):
+                                    ("## P&L by VIX state at entry", "Definitions: src/quant/live/vix_tags.py.", vix_tags.SPLITS),
+                                    ("## P&L by expected move (VIX / 16) at entry",
+                                     "Expected move = prior VIX close / 16 × the session's open, in /NQ points; definitions: "
+                                     "src/quant/live/em_tags.py. Target splits cover live trades only (the shadow ledger keeps "
+                                     "no target).", em_tags.SPLITS)):
             out += ["", head, "", f"{STATE_NOTE} {extra}", ""]
             for name, g in tagged.items():
                 out += [f"### {name}", ""] + (gex_tags.regime_tables(g, splits) if len(g) else ["No trades yet.", ""])

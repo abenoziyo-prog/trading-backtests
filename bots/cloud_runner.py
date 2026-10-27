@@ -8,9 +8,11 @@ sandbox). Keeps the bot's files in a database instead of a volume.
   3. start bots/nq_paper_bot.py (restarted if it exits; after 5 quick failures the runner exits so the
      platform restarts the container)
   4. every SYNC_S seconds: save changed files back to the database (the token refresh, bars, ledger, audit)
-  5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ and QQQ 1-minute history), then save
-  6. trading days 09:20 and 15:50 ET: run bots/gex_snapshot.py (option chains -> dealer gamma), then save
-  7. on SIGTERM (redeploy/stop): stop the bot, final save, exit
+  5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ, QQQ, /ES, SPY 1-minute history), log the database size, save
+  6. trading days 09:20 and 16:20 ET: run bots/gex_snapshot.py (option chains -> dealer gamma), then save
+  7. trading days 09:25-16:15 ET: keep bots/option_flow_capture.py --loop running (near-expiry chains every 5 minutes;
+     the 16:20 snapshot waits for it to end, so the two never hold memory at the same time)
+  8. on SIGTERM (redeploy/stop): stop the bot, final save, exit
 Database: STATE_DB_URL = postgresql://... or sqlite:///path (local testing); if unset, POSTGRES_URI / DATABASE_URL
 (as injected by a linked Northflank PostgreSQL add-on, e.g. NF_NQBOT_DB_POSTGRES_URI) is used.
 One table, nqbot_files(path, sha256, data, updated). Read-only towards Schwab: this file has no Schwab calls.
@@ -32,9 +34,13 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 NY = ZoneInfo("America/New_York")
-GEX_SLOTS = [(9, 20), (15, 50)]  # before the open (fresh open interest) and before the close (same-day positioning)
+GEX_SLOTS = [(9, 20), (16, 20)]  # before the open (fresh open interest) and after the intraday capture has ended
+FLOW_START, FLOW_END, FLOW_MAX_STARTS = (9, 25), (16, 15), 5
 SYNC_DIRS = ["state/nqbot", "data/schwab"]
 SKIP = {".tmp"}  # half-written files are never saved
+# write-once archives the container never reads back: kept in the database, not restored (saves memory and time)
+NO_RESTORE = ("data/schwab/flow/", "data/schwab/gex/")
+RESTORE_ALWAYS = ("data/schwab/gex/gex_daily.csv", "data/schwab/flow/capture_log.csv")
 log = logging.getLogger("runner")
 
 
@@ -59,8 +65,15 @@ class FileStore:
     def hashes(self) -> dict[str, str]:
         return dict(self.conn.execute("SELECT path, sha256 FROM nqbot_files").fetchall())
 
-    def read_all(self):
-        yield from self.conn.execute("SELECT path, data FROM nqbot_files").fetchall()
+    def paths(self) -> list[str]:
+        return [r[0] for r in self.conn.execute("SELECT path FROM nqbot_files").fetchall()]
+
+    def read(self, path: str) -> bytes:
+        return bytes(self.conn.execute(f"SELECT data FROM nqbot_files WHERE path = {self.ph}", (path,)).fetchone()[0])
+
+    def size_mb(self) -> float:
+        q = "SELECT pg_database_size(current_database())" if self.pg else "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM nqbot_files"
+        return self.conn.execute(q).fetchone()[0] / 1e6
 
     def put(self, path: str, sha: str, data: bytes) -> None:
         p = self.ph
@@ -75,11 +88,14 @@ class StateSync:
         self.known = store.hashes()
 
     def restore(self) -> int:
+        """Write the saved files back, one at a time (the archive outgrows the container's memory)."""
         n = 0
-        for path, data in self.store.read_all():
+        for path in self.store.paths():
+            if path.startswith(NO_RESTORE) and path not in RESTORE_ALWAYS:
+                continue
             f = self.root / path
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_bytes(bytes(data))
+            f.write_bytes(self.store.read(path))
             if f.name.endswith(".json") or f.name.endswith(".env"):
                 f.chmod(0o600)
             n += 1
@@ -126,6 +142,11 @@ def gex_due(now: datetime, done: set[str], cal) -> str | None:
     return None
 
 
+def flow_due(now: datetime, cal) -> bool:
+    """The intraday option capture should be running now (trading day, 09:25-16:15 ET)."""
+    return cal.is_trading_day(now.date()) and FLOW_START <= (now.hour, now.minute) < FLOW_END
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     env = os.environ
@@ -134,7 +155,8 @@ def main() -> None:
     url = db_url(env)
     if not url:
         sys.exit("no database: set STATE_DB_URL (or link the PostgreSQL add-on, which provides POSTGRES_URI)")
-    sync = StateSync(FileStore(url))
+    store = FileStore(url)
+    sync = StateSync(store)
     log.info("restored %d files from the database", sync.restore())
     token = Path(env["SCHWAB_TOKEN_PATH"])
     if not token.exists() and env.get("SCHWAB_TOKEN_JSON"):
@@ -153,7 +175,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     sync_s, bot, fails, last_arch = float(env.get("SYNC_S", 60)), None, [], None
     from quant.live.calendar import Calendar
-    cal, gex_done = Calendar(), set()
+    cal, gex_done, flow, flow_starts = Calendar(), set(), None, {}
     next_sync = 0.0
     while not stopping:
         if bot is None or bot.poll() is not None:
@@ -171,12 +193,24 @@ def main() -> None:
             last_arch = now.date().isoformat()
             r = subprocess.run([sys.executable, str(ROOT / "bots" / "schwab_archiver.py")], cwd=ROOT)
             log.info("archiver finished with code %d", r.returncode)
+            try:
+                log.info("database size %.0f MB", store.size_mb())
+            except Exception:
+                log.exception("database size query failed")
             next_sync = 0
-        slot = gex_due(now, gex_done, cal)
+        if flow is not None and flow.poll() is not None:
+            log.info("option flow capture exited with code %d", flow.returncode)
+            flow, next_sync = None, 0
+        day = now.date().isoformat()
+        if flow is None and flow_due(now, cal) and flow_starts.get(day, 0) < FLOW_MAX_STARTS:
+            flow_starts[day] = flow_starts.get(day, 0) + 1
+            flow = subprocess.Popen([sys.executable, str(ROOT / "bots" / "option_flow_capture.py"), "--loop"], cwd=ROOT)
+            log.info("option flow capture started (pid %d)", flow.pid)
+        slot = gex_due(now, gex_done, cal) if flow is None else None  # never alongside the capture (memory)
         if slot:
             gex_done.add(slot)
             try:
-                r = subprocess.run([sys.executable, str(ROOT / "bots" / "gex_snapshot.py")], cwd=ROOT, timeout=300)
+                r = subprocess.run([sys.executable, str(ROOT / "bots" / "gex_snapshot.py")], cwd=ROOT, timeout=600)
                 log.info("GEX snapshot %s finished with code %d", slot, r.returncode)
             except subprocess.TimeoutExpired:
                 log.warning("GEX snapshot %s timed out", slot)
@@ -187,6 +221,8 @@ def main() -> None:
                 log.info("saved %d changed files", n)
             next_sync = time.time() + sync_s
         time.sleep(1)
+    if flow is not None and flow.poll() is None:
+        flow.terminate()
     if bot is not None and bot.poll() is None:
         bot.terminate()
         try:

@@ -100,7 +100,8 @@ def test_no_order_code_in_live_bot():
     """The bot is data-only: no order endpoints or order builders anywhere in its code."""
     files = list((ROOT / "src/quant/live").glob("*.py")) + [ROOT / "bots/nq_paper_bot.py", ROOT / "bots/schwab_login.py",
                                                        ROOT / "bots/schwab_archiver.py", ROOT / "bots/seed_levels.py",
-                                                       ROOT / "bots/cloud_runner.py", ROOT / "bots/gex_snapshot.py"]
+                                                       ROOT / "bots/cloud_runner.py", ROOT / "bots/gex_snapshot.py",
+                                                       ROOT / "bots/option_flow_capture.py"]
     banned = re.compile(r"place_order|replace_order|cancel_order|schwab\.orders|OrderBuilder|equity_buy|equity_sell|"
                         r"futures_buy|order_spec|preview_order")
     for f in files:
@@ -346,6 +347,22 @@ def test_cloud_state_sync_round_trip(tmp_path):
     assert (b / "state/nqbot/schwab_token.json").read_text() == '{"token": 2}'
     assert (b / "data/schwab/NQ_1min.parquet").read_bytes() == b"\x00\x01" and not (b / "data/schwab/x.tmp").exists()
     assert oct((b / "state/nqbot/schwab_token.json").stat().st_mode)[-3:] == "600"
+
+
+def test_cloud_restore_skips_write_once_archives(tmp_path):
+    cr = _runner()
+    db = f"sqlite:///{tmp_path / 'state.db'}"
+    a = tmp_path / "a"
+    for f in ("data/schwab/flow/QQQ/2026-10-27/0935.csv.gz", "data/schwab/flow/capture_log.csv",
+              "data/schwab/gex/QQQ/2026-10-27_0920.parquet", "data/schwab/gex/gex_daily.csv", "data/schwab/ES_1min.parquet"):
+        (a / f).parent.mkdir(parents=True, exist_ok=True)
+        (a / f).write_bytes(b"x")
+    assert cr.StateSync(cr.FileStore(db), root=a).save() == 5
+    b = tmp_path / "b"
+    s = cr.StateSync(cr.FileStore(db), root=b)
+    assert s.restore() == 3 and not (b / "data/schwab/flow/QQQ").exists() and not (b / "data/schwab/gex/QQQ").exists()
+    assert s.save() == 0                                          # archives left in the database are not re-sent or lost
+    assert cr.FileStore(db).size_mb() > 0
 
 
 def test_cloud_archive_schedule():

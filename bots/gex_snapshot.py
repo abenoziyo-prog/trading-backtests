@@ -1,11 +1,11 @@
-"""Daily dealer-gamma (GEX) snapshot from Schwab option chains: QQQ and NDX index options
-(Schwab's chains endpoint does not serve /NQ futures options).
+"""Daily dealer-gamma (GEX) snapshot from Schwab option chains: QQQ, NDX, SPY and SPX
+(Schwab's chains endpoint does not serve /NQ or /ES futures options).
 
     python bots/gex_snapshot.py                      # all default symbols
     python bots/gex_snapshot.py --symbols QQQ
 
 Read-only: the only Schwab call is the option chain (ReadOnlyClient allows nothing else). Run by bots/cloud_runner.py
-at 09:20 and 15:50 ET on trading days. For each symbol it saves the raw chain (expirations up to --days ahead,
+at 09:20 and 16:20 ET on trading days. For each symbol it saves the raw chain (expirations up to --days ahead,
 --strikes strikes each side of the money, fetched a few expiry days and one contract type per request) and one summary row (net GEX, gamma flip, call/put walls: see
 src/quant/live/gex.py). A symbol Schwab does not serve is logged and skipped.
 Files: data/schwab/gex/<SYMBOL>/<YYYY-MM-DD_HHMM>.parquet and data/schwab/gex/gex_daily.csv.
@@ -30,7 +30,7 @@ from quant.live.schwab_feed import ReadOnlyClient, make_client  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "gex"
-SYMBOLS = ["QQQ", "$NDX"]  # /NQ futures options: the chains endpoint answers 400 (checked 2026-10-27)
+SYMBOLS = ["QQQ", "$NDX", "SPY", "$SPX"]  # /NQ futures options: the chains endpoint answers 400 (checked 2026-10-27)
 CHUNK_DAYS = 3  # expiry days per request: keeps each response small (the container has 256 MB)
 
 

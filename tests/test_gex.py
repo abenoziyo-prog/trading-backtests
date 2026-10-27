@@ -78,9 +78,13 @@ def test_runner_gex_schedule():
     assert k == "2026-10-27 09:20"
     done.add(k)
     assert r.gex_due(datetime(2026, 10, 27, 9, 30, tzinfo=NY), done, cal) is None
-    assert r.gex_due(datetime(2026, 10, 27, 15, 55, tzinfo=NY), done, cal) == "2026-10-27 15:50"
+    assert r.gex_due(datetime(2026, 10, 27, 16, 19, tzinfo=NY), done, cal) is None
+    assert r.gex_due(datetime(2026, 10, 27, 16, 25, tzinfo=NY), done, cal) == "2026-10-27 16:20"
     assert r.gex_due(datetime(2026, 10, 27, 12, 0, tzinfo=NY), done, cal) is None   # 09:20 slot expired, no catch-up
     assert r.gex_due(datetime(2026, 10, 31, 9, 25, tzinfo=NY), set(), cal) is None   # Saturday
+    assert r.flow_due(datetime(2026, 10, 27, 9, 25, tzinfo=NY), cal) and r.flow_due(datetime(2026, 10, 27, 16, 14, tzinfo=NY), cal)
+    assert not r.flow_due(datetime(2026, 10, 27, 9, 24, tzinfo=NY), cal) and not r.flow_due(datetime(2026, 10, 27, 16, 15, tzinfo=NY), cal)
+    assert not r.flow_due(datetime(2026, 10, 31, 12, 0, tzinfo=NY), cal)
 
 
 def test_snapshot_through_read_only_client(tmp_path):

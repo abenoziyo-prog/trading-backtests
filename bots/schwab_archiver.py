@@ -1,4 +1,4 @@
-"""Archive Schwab 1-minute OHLCV for /NQ and QQQ so the history keeps growing past Schwab's ~6-week window.
+"""Archive Schwab 1-minute OHLCV for /NQ, QQQ, /ES and SPY so the history keeps growing past Schwab's ~6-week window.
 
     python bots/schwab_archiver.py                    # update data/schwab/*_1min.parquet (first run backfills)
     python bots/schwab_archiver.py --symbols /NQ QQQ ES=... --days 60
@@ -8,7 +8,7 @@ Read-only: the only Schwab call is price history (ReadOnlyClient allows nothing 
 loses nothing; it is scheduled daily (deploy/com.nqbot.archiver.plist). Each run fetches from the last saved
 bar (or --days back on the first run) in chunks under Schwab's 40,000-bar per-request cap, keeps only
 completed minutes, merges, de-duplicates and writes atomically.
-Files: data/schwab/NQ_1min.parquet, data/schwab/QQQ_1min.parquet (index: bar start, America/New_York;
+Files: data/schwab/<NQ|QQQ|ES|SPY>_1min.parquet (index: bar start, America/New_York;
 columns open, high, low, close, volume); a run log in data/schwab/archive_log.csv.
 """
 from __future__ import annotations
@@ -77,7 +77,7 @@ def update(client: ReadOnlyClient, symbol: str, days: int, now: datetime) -> dic
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--symbols", nargs="+", default=["/NQ", "QQQ"])
+    ap.add_argument("--symbols", nargs="+", default=["/NQ", "QQQ", "/ES", "SPY"])
     ap.add_argument("--days", type=int, default=60, help="look-back on the first run (Schwab keeps ~6 weeks)")
     a = ap.parse_args()
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_TOKEN_PATH") if not os.environ.get(k)]

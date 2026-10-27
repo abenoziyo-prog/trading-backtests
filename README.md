@@ -99,6 +99,13 @@ python scripts/plot_sessions.py --start 2025-12-09 --end 2025-12-10 --tf 15
 ```
 Outputs go to `reports/levels/` (see `reports/levels/README.md`). They include high/low times, when each level was taken out, and QQQ VWAP and volume POC. Session windows are defined in `src/quant/sessions.py`.
 
+## VWAP
+
+`src/quant/vwap.py`: session and weekly VWAP with volume-weighted standard-deviation bands (z = distance in σ), n-minute
+resampling and mapping of QQQ's VWAP onto /NQ (NSX has no volume). `scripts/vwap_study.py` measures how price behaves
+around the bands on 1/5/15/30-minute bars and runs a pre-registered band mean-reversion test
+(`reports/vwap/VWAP_STUDY.md`).
+
 ## Caveats
 
 - Yahoo data is free but unofficial; it is used here only for cross-checks (SPX/NDX daily) and short 1-minute windows.

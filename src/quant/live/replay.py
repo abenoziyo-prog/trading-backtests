@@ -1,7 +1,7 @@
 """Replay historical 1-minute bars through the live engine (for parity checks and dry runs)."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import numpy as np
 import pandas as pd
@@ -21,15 +21,18 @@ def bars_of(day_min: pd.DataFrame) -> Iterator[Bar]:
 
 
 def replay(rth: pd.DataFrame, levels: pd.DataFrame, min_bars: int = 200,
-           exits: dict[str, ExitPolicy] | None = None) -> Iterator[tuple[DayEngine, list[Event]]]:
+           exits: dict[str, ExitPolicy] | Callable[[pd.Timestamp, pd.DataFrame], dict[str, ExitPolicy]] | None = None
+           ) -> Iterator[tuple[DayEngine, list[Event]]]:
     """rth: 1-minute US-session bars (tz-aware NY index); levels: daily PDH/PDL/PDC/london_high indexed by day.
+    exits: exit rules per strategy, or a function (day, that day's bars) -> rules, for rules that change by day.
     Days with fewer than `min_bars` bars or no previous range are skipped (as in the backtests)."""
     by_day = {d: g for d, g in rth.groupby(rth.index.tz_localize(None).normalize())}
     for day, r in levels.iterrows():
         dm = by_day.get(day)
         if dm is None or len(dm) < min_bars or not (r.PDH - r.PDL) > 0:
             continue
-        eng = DayEngine(dm.index[0].to_pydatetime().replace(hour=0, minute=0), levels_from_row(r), exits=exits or {})
+        ex = exits(day, dm) if callable(exits) else exits
+        eng = DayEngine(dm.index[0].to_pydatetime().replace(hour=0, minute=0), levels_from_row(r), exits=ex or {})
         ev: list[Event] = []
         for b in bars_of(dm):
             ev += eng.on_bar(b)

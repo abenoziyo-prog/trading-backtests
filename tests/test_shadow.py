@@ -43,8 +43,9 @@ def test_close_runs_every_idea_once(tmp_path):
     sb.close(date(2026, 10, 22), "us")
     sb.close(date(2026, 10, 22), "overnight")
     done = pd.read_csv(sb.done_path)
-    assert len(done) == len(sb.ideas) and set(done.idea) == {m.NAME for m in sb.ideas}
-    assert sb.close(date(2026, 10, 22), "us") == 0 and len(pd.read_csv(sb.done_path)) == len(sb.ideas)  # recorded once
+    waiting = {m.NAME for m in sb.ideas if m.NAME.startswith("us_em_")}  # need a VIX close (none in this test)
+    assert set(done.idea) == {m.NAME for m in sb.ideas} - waiting
+    assert sb.close(date(2026, 10, 22), "us") == 0 and len(pd.read_csv(sb.done_path)) == len(sb.ideas) - len(waiting)  # recorded once
     if sb.trades_path.exists():
         t = pd.read_csv(sb.trades_path)
         assert (t.day == "2026-10-22").all()  # only the session's own trades
@@ -59,3 +60,21 @@ def test_missing_data_is_not_recorded(tmp_path):
 
 def test_ideas_load_without_research_data():
     assert all(hasattr(m, "trades") and m.SESSION in ("us", "overnight") for m in load_ideas())
+
+
+def test_vix_feature_and_ready_hook(tmp_path):
+    m = minutes(date(2026, 8, 20), date(2026, 10, 23))
+    vix = pd.Series([18.0, 20.0], index=pd.to_datetime(["2026-10-20", "2026-10-21"]))
+    ctx = LiveContext(m, Calendar(), vix)
+    f = ctx.features
+    assert f.loc[pd.Timestamp("2026-10-22"), "vix"] == 20.0 and f.loc[pd.Timestamp("2026-10-21"), "vix"] == 18.0
+    assert np.isnan(f.loc[pd.Timestamp("2026-10-01"), "vix"])
+    sb = book(tmp_path, m)
+    em = [x for x in sb.ideas if x.NAME.startswith("us_em_")]
+    assert len(em) == 3
+    sb.close(date(2026, 10, 22), "us")                         # no VIX in this test's data: the EM ideas wait
+    done = set(pd.read_csv(sb.done_path).idea)
+    assert not done & {x.NAME for x in em} and "s3_first_signal_only" in done
+    sb.vix_daily = lambda since: vix                           # VIX arrives: they run on the next attempt
+    sb.close(date(2026, 10, 22), "us")
+    assert {x.NAME for x in em} <= set(pd.read_csv(sb.done_path).idea)

@@ -102,7 +102,9 @@ def verdict(gates: dict, cons: dict) -> str:
 
 
 def evaluate(idea: pd.DataFrame, base: pd.DataFrame, order: list[str], n_tested: int, neighbors: list[pd.DataFrame] | None = None,
-             replaces: str | None = None) -> dict:
+             replaces: str | list[str] | None = None) -> dict:
+    """replaces: one live strategy (the idea's trades take its place), or a list of them (the idea's trades carry a
+    `cand` column naming which strategy each one replaces, e.g. new exit rules for the whole US book)."""
     s = stats(idea)
     _, last6 = halves(idea)
     g1 = s["trades"] >= 30 and len(last6) >= 10
@@ -111,8 +113,10 @@ def evaluate(idea: pd.DataFrame, base: pd.DataFrame, order: list[str], n_tested:
     g3, cons = consistency(idea)
     base_taken = picker(base, order)
     if replaces:
-        both = picker(pd.concat([base[base.cand != replaces], idea.assign(cand=replaces)], ignore_index=True), order)
-        both = both.assign(cand=both.cand.where(both.cand != replaces, "IDEA"))
+        names = [replaces] if isinstance(replaces, str) else list(replaces)
+        new = idea.assign(cand=replaces) if isinstance(replaces, str) else idea
+        both = picker(pd.concat([base[~base.cand.isin(names)], new], ignore_index=True), order)
+        both = both.assign(cand=both.cand.where(~both.cand.isin(names), "IDEA"))
     else:
         both = picker(pd.concat([base, idea.assign(cand="IDEA")], ignore_index=True), order + ["IDEA"])
     ba, bb = halves(base_taken)

@@ -129,6 +129,11 @@ dealers long 0DTE gamma if `g_total` > 0, short if < 0. Size: |`g_total`| percen
 | Z4 | On dealer-long days, price closes nearer the 14:30 pin strike than at 14:30, more than for strikes two away |
 | Z5 | The hedge flow that gamma forces (−gamma × last 15-minute move) points the way of the next 15 minutes |
 
+**Revised 2026-10-28,** after the first data check and before any outcome existed. Volume after a capture gap is no
+longer signed: the first day's 13:20 start had signed the whole morning's backlog by one trade. Sessions are now
+compared as session-level means per state, because QQQ, SPX and SPY stayed in one state all day, which a
+within-session pairing can never use.
+
 **Verdict rules:**
 - Verdicts start at 40 sessions (about late December 2026).
 - Sessions 1–20 are the design sample and are used only for data checks.

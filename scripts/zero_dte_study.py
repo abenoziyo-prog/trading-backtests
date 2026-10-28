@@ -1,7 +1,7 @@
 """0DTE dealer gamma vs intraday /NQ price action, from our own 5-minute Schwab captures. PRE-REGISTERED 2026-10-28
 (docs/GEX_FRAMEWORK.md, section Z), before any capture was analysed.
 
-    python scripts/pull_cloud_files.py data/schwab/flow/ data/schwab/NQ_1min.parquet   # the captures + /NQ bars
+    python scripts/pull_cloud_files.py data/schwab/flow/ data/schwab/NQ_1min.parquet state/nqbot/bars/   # captures + /NQ bars
     python scripts/zero_dte_study.py                    # QQQ (primary) and $SPX, $NDX, SPY (reported)
 
 Only same-day expiries. Dealer gamma per capture (quant.live.flow.dealer_gamma_0dte, $ of underlying per 1% move):
@@ -22,9 +22,13 @@ Hypotheses (directions fixed):
   Z4  pin: on days dealers are long 0DTE gamma at 14:30, /NQ (mapped) closes nearer the 14:30 pin strike than it was
       at 14:30, by more than it does for placebo strikes two strikes either side
   Z5  the forced hedge flow points the next 15 minutes' way: mean of sign(hedge) x next 15-minute return > 0
-Statistics: each outcome is first demeaned by half hour (all sessions); per session the short-minus-long (or top-minus
-bottom) difference; t across sessions that have both groups. Verdicts only from 40 sessions: sessions 1-20 are the
-design sample (data checks only), sessions 21+ are judged; PASS = predicted direction and |t| >= 3.0.
+Statistics: each outcome is first demeaned by half hour (all sessions); each session contributes its mean over its
+short-gamma captures and, separately, over its long-gamma captures (>= 3 captures each); Welch t between those session
+means. Verdicts only from 40 sessions: sessions 1-20 are the design sample (data checks only), sessions 21+ are judged;
+PASS = predicted direction and |t| >= 3.0.
+REVISED 2026-10-28 after the first data check (1 session, before any outcome existed): the within-session pairing
+became the session-level comparison above (QQQ, SPX and SPY spent the whole first day in one state, which a pairing
+can never use), and volume after a capture gap is no longer signed (quant.live.flow.MAX_GAP).
 Writes reports/zero_dte/ZERO_DTE_STUDY.md.
 """
 from __future__ import annotations
@@ -52,7 +56,10 @@ def table(head, rows):
 
 
 def nq_minutes() -> pd.DataFrame:
-    m = pd.read_parquet(NQ)
+    """/NQ 1-minute bars: the nightly Schwab archive, topped up with the bot's own bars (state/nqbot/bars, pulled with
+    the captures) for the days the archive has not reached yet."""
+    from quant.live.shadow import load_minutes
+    m = load_minutes(ROOT / "state" / "nqbot", NQ, pd.Timestamp("2026-09-01").date())
     m.index = m.index.tz_convert(NY)
     return m
 
@@ -106,13 +113,19 @@ def day_rows(sym: str, day: str, nq: pd.DataFrame) -> tuple[pd.DataFrame, dict |
     return pd.DataFrame(rows), pin
 
 
-def paired(x: pd.DataFrame, col: str, mask_a, mask_b) -> tuple[float, float, int]:
-    """Mean over sessions of (mean col where a) - (mean col where b), its t across sessions, and the session count."""
+def cells(x: pd.DataFrame, col: str, mask_a, mask_b, min_n: int = 3) -> tuple[float, float, str]:
+    """Session-level comparison: every session contributes its mean of col over its captures in group a (if it has at
+    least min_n) and, separately, over group b; effect = mean of the a-means - mean of the b-means, Welch t across those
+    session means. Sessions that stay in one state all day count too (a within-session pairing would drop them)."""
     d = x.assign(_a=mask_a, _b=mask_b)
-    per = d.groupby("day").apply(lambda g: g.loc[g._a, col].mean() - g.loc[g._b, col].mean(), include_groups=False).dropna()
-    if len(per) < 3 or per.std() == 0:
-        return (per.mean() if len(per) else np.nan), np.nan, len(per)
-    return per.mean(), per.mean() / per.std() * np.sqrt(len(per)), len(per)
+    ma = d[d._a].groupby("day")[col].agg(["mean", "size"])
+    mb = d[d._b].groupby("day")[col].agg(["mean", "size"])
+    a_, b_ = ma[ma["size"] >= min_n]["mean"].dropna(), mb[mb["size"] >= min_n]["mean"].dropna()
+    n = f"{len(a_)} / {len(b_)}"
+    if len(a_) < 2 or len(b_) < 2:
+        return np.nan, np.nan, n
+    se = np.sqrt(a_.var() / len(a_) + b_.var() / len(b_))
+    return a_.mean() - b_.mean(), (a_.mean() - b_.mean()) / se if se > 0 else np.nan, n
 
 
 def tests(x: pd.DataFrame, pins: pd.DataFrame, g: str) -> list[tuple[str, float, float, int, int]]:
@@ -121,10 +134,10 @@ def tests(x: pd.DataFrame, pins: pd.DataFrame, g: str) -> list[tuple[str, float,
         x[c + "_dm"] = x[c] - x.groupby("half")[c].transform("mean")
     short, long_ = x[g] < 0, x[g] > 0
     pct = x.groupby("half")[g].transform(lambda s: s.abs().rank(pct=True))
-    out = [("Z1 range30: short − long", *paired(x, "range30_dm", short, long_), 1),
-           ("Z2 cont15: short − long", *paired(x, "cont15_dm", short, long_), 1),
-           ("Z3 long: range30 top − bottom third of |gamma|", *paired(x, "range30_dm", long_ & (pct > 2 / 3), long_ & (pct < 1 / 3)), -1),
-           ("Z3 short: range30 top − bottom third of |gamma|", *paired(x, "range30_dm", short & (pct > 2 / 3), short & (pct < 1 / 3)), 1)]
+    out = [("Z1 range30: short − long", *cells(x, "range30_dm", short, long_), 1),
+           ("Z2 cont15: short − long", *cells(x, "cont15_dm", short, long_), 1),
+           ("Z3 long: range30 top − bottom third of |gamma|", *cells(x, "range30_dm", long_ & (pct > 2 / 3), long_ & (pct < 1 / 3)), -1),
+           ("Z3 short: range30 top − bottom third of |gamma|", *cells(x, "range30_dm", short & (pct > 2 / 3), short & (pct < 1 / 3)), 1)]
     s = x.assign(z5=np.sign(-x[g] * x.u_move) * x.next15)          # the hedge this estimate implies, and what followed
     per = s.groupby("day").z5.mean().dropna()
     out.append(("Z5 sign(hedge flow) × next 15 min", per.mean(), per.mean() / per.std() * np.sqrt(len(per)) if len(per) > 2 and per.std() > 0 else np.nan,

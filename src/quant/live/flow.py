@@ -93,6 +93,7 @@ def intervals(t: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+MAX_GAP = 10       # minutes: volume over a longer gap between captures is not signed (see dealer_gamma_0dte)
 AM_ROOTS = ("SPX2", "NDX2")  # AM-settled monthlies (root SPX / NDX, no W / P): expired at the open, no gamma intraday
 
 
@@ -105,16 +106,28 @@ def dealer_gamma_0dte(t: pd.DataFrame) -> pd.DataFrame:
       g_iv    the same with the implied-volatility proxy
       g_total g_oi + g_tick (the primary estimate of docs/GEX_FRAMEWORK.md section Z)
     Gamma is Black-Scholes at each capture's IV and time to 16:00 (quant.live.gex). Also per capture: the 0DTE strike
-    with the most open-interest-plus-traded gamma (pin), 0DTE contracts traded so far and the spot."""
+    with the most open-interest-plus-traded gamma (pin), 0DTE contracts traded so far, the share of that volume the
+    proxies could sign (flow_signed) and the customers' net buying as a share of it (net_buy_tick), and the spot.
+    Volume is signed only over intervals of at most MAX_GAP minutes: a first capture after a gap (a late start, a
+    restart) carries the whole backlog since the open, which one last trade cannot sign; it adds no flow. Captures from
+    16:00 on are dropped (same-day expiries are dead)."""
     from quant.live.gex import bs_gamma
     f = contract_flow(t[t.dte == 0])
-    f = f[~f.occ.str.startswith(AM_ROOTS) & f.iv.notna() & (f.strike > 0)].copy()
+    mod = f["asof"].dt.hour * 60 + f["asof"].dt.minute
+    f = f[~f.occ.str.startswith(AM_ROOTS) & f.iv.notna() & (f.strike > 0) & (mod < 960)].copy()
     if f.empty:
         return pd.DataFrame()
     f = f.sort_values(["occ", "asof"])
     g = f.groupby("occ", sort=False)
-    f["cum_tick"] = (f.traded.fillna(0) * f.side_tick).groupby(f.occ).cumsum()
-    f["cum_iv"] = (f.traded.fillna(0) * f.side_iv).groupby(f.occ).cumsum()
+    gap = (f["asof"] - g["asof"].shift()).dt.total_seconds() / 60
+    first_ok = (f["asof"].dt.hour * 60 + f["asof"].dt.minute) <= 570 + MAX_GAP     # a first capture right after the open
+    signable = np.where(gap.isna(), first_ok, gap <= MAX_GAP)
+    vol = f.traded.fillna(0).where(signable, 0.0)
+    f["signed_vol"] = vol
+    f["cum_tick"] = (vol * f.side_tick).groupby(f.occ).cumsum()
+    f["cum_iv"] = (vol * f.side_iv).groupby(f.occ).cumsum()
+    f["cum_vol"] = vol.groupby(f.occ).cumsum()
+    f["cum_hit"] = (vol * (f.side_tick != 0)).groupby(f.occ).cumsum()
     f["oi0"] = g.open_interest.transform("first")
     f["gam"] = bs_gamma(f.spot.to_numpy(), f.strike.to_numpy(), f.iv.to_numpy(), _years(f))
     scale = f.gam * f.multiplier * f.spot ** 2 * 0.01
@@ -123,7 +136,9 @@ def dealer_gamma_0dte(t: pd.DataFrame) -> pd.DataFrame:
     f["g_abs"] = (f.oi0 + f.volume.fillna(0)) * scale
     k = f.groupby("asof")
     out = pd.DataFrame(dict(spot=k.spot.first(), g_oi=k.g_oi.sum(), g_tick=k.g_tick.sum(), g_iv=k.g_iv.sum(),
-                            traded=k.volume.sum(),
+                            traded=k.volume.sum(), cum_vol=k.cum_vol.sum(),
+                            flow_signed=k.cum_hit.sum() / k.cum_vol.sum().replace(0, np.nan),
+                            net_buy_tick=k.cum_tick.sum() / k.cum_vol.sum().replace(0, np.nan),
                             pin=k.apply(lambda x: x.groupby("strike").g_abs.sum().idxmax(), include_groups=False)))
     out["g_total"] = out.g_oi + out.g_tick
     return out

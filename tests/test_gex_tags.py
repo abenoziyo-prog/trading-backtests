@@ -2,6 +2,7 @@
 import csv
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -83,3 +84,23 @@ def test_status_survives_missing_gex_files(tmp_path):
         csv.DictWriter(f, fieldnames=TRADE_FIELDS).writeheader()
     md = write_status(led, now=datetime(2026, 10, 27, 16, 5)).read_text()
     assert "## P&L by GEX regime" in md and "## P&L by VIX state" in md and "## Shadow book" in md
+
+
+def test_spx_gex_history_tags(world):
+    days = pd.bdate_range("2025-09-01", "2026-10-26")
+    gex = np.linspace(1e9, 5e9, len(days))
+    gex[-1] = -2e9                                            # 10-26: negative and the lowest of the year
+    pd.DataFrame(dict(date=days.strftime("%Y-%m-%d"), price=7000.0, dix=0.45, gex=gex)).to_csv(world["gex"] / "spx_gex_squeezemetrics.csv", index=False)
+    t = tag(trades(["2026-10-26T10:00:00-04:00", "2026-10-27T10:02:00-04:00"]), world["state"], world["gex"], world["flow"], world["archive"])
+    assert t.loc[0, "spx_gex_date"] == "2026-10-23" and t.loc[0, "spx_gex_level"] == "high" and t.loc[0, "spx_gex_sign"] == "positive"
+    assert t.loc[1, "spx_gex_date"] == "2026-10-26" and t.loc[1, "spx_gex_level"] == "low" and t.loc[1, "spx_gex_sign"] == "negative"
+
+
+def test_fetch_validation():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("f", Path(__file__).resolve().parents[1] / "bots/fetch_spx_gex.py")
+    f = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(f)
+    assert f.valid("date,price,dix,gex\n2026-10-27,7722.6,0.45,5515099082.65\n") == 1
+    assert f.valid("<html>blocked</html>") == 0 and f.valid("date,price,dix,gex\n2026-10-27,1,2,x\n") == 0

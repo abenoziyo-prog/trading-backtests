@@ -8,7 +8,8 @@ sandbox). Keeps the bot's files in a database instead of a volume.
   3. start bots/nq_paper_bot.py (restarted if it exits; after 5 quick failures the runner exits so the
      platform restarts the container)
   4. every SYNC_S seconds: save changed files back to the database (the token refresh, bars, ledger, audit)
-  5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ, QQQ, /ES, SPY, VIX family 1-minute history), log the database size, save
+  5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ, QQQ, /ES, SPY, VIX family 1-minute history), then
+     bots/fetch_spx_gex.py (SqueezeMetrics' daily S&P GEX history, not Schwab), log the database size, save
   6. trading days 09:20 and 16:20 ET: run bots/gex_snapshot.py (option chains -> dealer gamma), then save
   7. trading days 09:25-16:15 ET: keep bots/option_flow_capture.py --loop running (near-expiry chains every 5 minutes;
      the 16:20 snapshot waits for it to end, so the two never hold memory at the same time)
@@ -40,7 +41,7 @@ SYNC_DIRS = ["state/nqbot", "data/schwab"]
 SKIP = {".tmp"}  # half-written files are never saved
 # write-once archives the container never reads back: kept in the database, not restored (saves memory and time)
 NO_RESTORE = ("data/schwab/flow/", "data/schwab/gex/")
-RESTORE_ALWAYS = ("data/schwab/gex/gex_daily.csv", "data/schwab/flow/capture_log.csv")
+RESTORE_ALWAYS = ("data/schwab/gex/gex_daily.csv", "data/schwab/flow/capture_log.csv", "data/schwab/gex/spx_gex_squeezemetrics.csv")
 log = logging.getLogger("runner")
 
 
@@ -175,7 +176,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     sync_s, bot, fails, last_arch = float(env.get("SYNC_S", 60)), None, [], None
     from quant.live.calendar import Calendar
-    cal, gex_done, flow, flow_starts = Calendar(), set(), None, {}
+    cal, gex_done, flow, flow_starts, spx_tried = Calendar(), set(), None, {}, False
     next_sync = 0.0
     while not stopping:
         if bot is None or bot.poll() is not None:
@@ -189,10 +190,16 @@ def main() -> None:
             log.info("bot started (pid %d)", bot.pid)
         now = datetime.now(NY)
         first_archive = last_arch is None and not any((ROOT / "data" / "schwab").glob("*.parquet"))
+        if not spx_tried and not (ROOT / "data" / "schwab" / "gex" / "spx_gex_squeezemetrics.csv").exists():
+            spx_tried = True                                  # first start without a copy: fetch it now (small, no pandas)
+            r = subprocess.run([sys.executable, str(ROOT / "bots" / "fetch_spx_gex.py")], cwd=ROOT, timeout=120)
+            log.info("S&P GEX history (SqueezeMetrics) fetched with code %d", r.returncode)
         if first_archive or archive_due(now, last_arch):  # first start: back-fill Schwab's ~6 weeks right away
             last_arch = now.date().isoformat()
             r = subprocess.run([sys.executable, str(ROOT / "bots" / "schwab_archiver.py")], cwd=ROOT)
             log.info("archiver finished with code %d", r.returncode)
+            r = subprocess.run([sys.executable, str(ROOT / "bots" / "fetch_spx_gex.py")], cwd=ROOT, timeout=120)
+            log.info("S&P GEX history (SqueezeMetrics) fetched with code %d", r.returncode)
             try:
                 log.info("database size %.0f MB", store.size_mb())
             except Exception:

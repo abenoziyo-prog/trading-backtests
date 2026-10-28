@@ -8,6 +8,9 @@ and a tag never changes a trade. Every trade gets the state that was known at it
             QQQ call/put walls converted to /NQ points (x NQ / QQQ at the snapshot) as distances from the entry.
   near-term the latest 5-minute capture (data/schwab/flow/QQQ) at or before the entry, at most NEAR_MAX_AGE old:
             net GEX of the 0-3 day expiries, which moves during the day.
+  S&P GEX  SqueezeMetrics' free daily S&P 500 GEX (bots/fetch_spx_gex.py), the value dated before the entry's day:
+            its 252-day percentile, level bucket (low < 33, high > 67) and sign. Over 2011-2026 a low level meant NQ
+            ranges ~1.2x larger than a high one beyond what VIX implies (scripts/gex_regime_history.py, holdout t +7.3).
 Trades before the first snapshot are tagged "no data" and reported as such.
 The tests on whether any of this predicts anything are pre-registered in docs/GEX_FRAMEWORK.md; this only records.
 """
@@ -28,7 +31,8 @@ ARCHIVE = ROOT / "data" / "schwab" / "NQ_1min.parquet"
 MAX_AGE = timedelta(hours=72)
 NEAR_MAX_AGE = timedelta(minutes=10)
 NY = "America/New_York"
-TAGS = ["gex_asof", "regime_qqq", "regime_ndx", "regime_spx", "regime_combo", "qqq_vs_flip_pct", "flip_side",
+SPX_HISTORY = "spx_gex_squeezemetrics.csv"   # bots/fetch_spx_gex.py
+TAGS = ["spx_gex_date", "spx_gex_pct", "spx_gex_level", "spx_gex_sign", "gex_asof", "regime_qqq", "regime_ndx", "regime_spx", "regime_combo", "qqq_vs_flip_pct", "flip_side",
         "call_wall_pts", "put_wall_pts", "near_asof", "near_net_gex", "near_regime"]
 
 
@@ -47,6 +51,21 @@ def snapshots(gex_dir: Path = GEX_DIR) -> pd.DataFrame:
                       aggfunc="last")
     w.columns = [f"{s}_{v}" for v, s in w.columns]
     return w.sort_index()
+
+
+def spx_history(gex_dir: Path = GEX_DIR) -> pd.DataFrame:
+    """SqueezeMetrics' daily S&P GEX with its percentile within the previous 252 sessions (incl. that day), by date."""
+    p = gex_dir / SPX_HISTORY
+    if not p.exists():
+        return pd.DataFrame()
+    g = pd.read_csv(p, parse_dates=["date"]).set_index("date").sort_index()
+    g["pct"] = g.gex.rolling(252, min_periods=200).apply(lambda w: (w <= w[-1]).mean() * 100, raw=True)
+    return g
+
+
+def spx_level(pct: float) -> str:
+    """Buckets of scripts/gex_regime_history.py: low < 33 <= mid <= 67 < high."""
+    return "" if not np.isfinite(pct) else "low" if pct < 33 else "high" if pct > 67 else "mid"
 
 
 def nq_minutes(state_dir: Path, archive: Path, since) -> pd.Series:
@@ -88,6 +107,15 @@ def tag(trades: pd.DataFrame, state_dir: Path, gex_dir: Path = GEX_DIR, flow_dir
         return out
     snaps = snapshots(gex_dir)
     entries = pd.to_datetime(out.entry_time, utc=True).dt.tz_convert(NY)
+    hist = spx_history(gex_dir)
+    for i, t in zip(out.index, entries):          # the last value dated before the entry's calendar day (no look-ahead)
+        j = hist.index.searchsorted(t.tz_localize(None).normalize(), side="left") - 1 if len(hist) else -1
+        if j < 0 or t.tz_localize(None).normalize() - hist.index[j] > timedelta(days=5):
+            continue
+        h = hist.iloc[j]
+        out.loc[i, ["spx_gex_date", "spx_gex_pct", "spx_gex_level", "spx_gex_sign"]] = [
+            f"{hist.index[j]:%Y-%m-%d}", round(float(h.pct), 1) if np.isfinite(h.pct) else "", spx_level(h.pct),
+            "negative" if h.gex < 0 else "positive"]
     nq = nq_minutes(state_dir, archive, (entries.min() - timedelta(days=4)).date()) if not snaps.empty else pd.Series(dtype=float)
     for i, t in zip(out.index, entries):
         near_asof, near = near_term(flow_dir, t)
@@ -115,7 +143,8 @@ def tag(trades: pd.DataFrame, state_dir: Path, gex_dir: Path = GEX_DIR, flow_dir
     return out
 
 
-SPLITS = [("QQQ regime (09:20 / 16:20 snapshot)", "regime_qqq"), ("QQQ × SPX regime", "regime_combo"),
+SPLITS = [("S&P GEX level, previous day (SqueezeMetrics, 252-day percentile: low < 33, high > 67)", "spx_gex_level"),
+          ("S&P GEX sign, previous day (SqueezeMetrics)", "spx_gex_sign"), ("QQQ regime (09:20 / 16:20 snapshot)", "regime_qqq"), ("QQQ × SPX regime", "regime_combo"),
           ("QQQ vs gamma flip", "flip_side"), ("Near-term QQQ regime (0-3 day expiries, 5-min capture)", "near_regime")]
 
 

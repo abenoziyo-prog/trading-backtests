@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+BATCH = 50  # files per request
 
 
 def main() -> None:
@@ -37,16 +38,16 @@ def main() -> None:
             print(f"{prefix}: {len(rows)} files, {sum(r[2] for r in rows) / 1e6:.1f} MB")
             if a.list:
                 continue
-            got = 0
-            for path, sha, _ in rows:
-                f = a.out / path
-                if f.exists() and hashlib.sha256(f.read_bytes()).hexdigest() == sha:
-                    continue
-                data = conn.execute("SELECT data FROM nqbot_files WHERE path = %s", (path,)).fetchone()[0]
-                f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_bytes(bytes(data))
-                got += 1
-            print(f"  downloaded {got}, up to date {len(rows) - got}")
+            need = [p for p, sha, _ in rows
+                    if not ((a.out / p).exists() and hashlib.sha256((a.out / p).read_bytes()).hexdigest() == sha)]
+            for i in range(0, len(need), BATCH):        # one round trip per batch: each one crosses the tunnel
+                part = need[i:i + BATCH]
+                for path, data in conn.execute("SELECT path, data FROM nqbot_files WHERE path = ANY(%s)", (part,)).fetchall():
+                    f = a.out / path
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    f.write_bytes(bytes(data))
+                print(f"  {min(i + BATCH, len(need))} / {len(need)}", flush=True)
+            print(f"  downloaded {len(need)}, up to date {len(rows) - len(need)}")
 
 
 if __name__ == "__main__":

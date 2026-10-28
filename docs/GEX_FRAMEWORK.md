@@ -111,6 +111,29 @@ The definitions are in `src/quant/live/vix_tags.py`, and the same code tags live
 
 The count of hypotheses rises to 20 (6 exploratory). The required t is about 3.0.
 
+### 0DTE dealer gamma vs intraday price (section Z, added 2026-10-28)
+
+Same-day expiries only, from our own 5-minute captures over the most recent sessions. Paid history was declined, so
+this builds forward. Rules, definitions and statistics are in `scripts/zero_dte_study.py`; the gamma estimate is in
+`quant.live.flow.dealer_gamma_0dte`.
+
+**Dealer gamma, `g_total`** = opening open interest with the naive sign, plus −(customers' net contracts bought since
+the open, tick proxy) × gamma. The open-interest-only, tick-only and IV-proxy versions are reported alongside. State:
+dealers long 0DTE gamma if `g_total` > 0, short if < 0. Size: |`g_total`| percentile within the same half hour.
+
+| ID | Hypothesis (on /NQ after each capture, 10:00–15:30) |
+|---|---|
+| Z1 | The 30-minute range is larger when dealers are short 0DTE gamma than when long |
+| Z2 | Moves continue over the next 15 minutes when dealers are short and reverse when long |
+| Z3 | Size matters: within each state, the top third of \|gamma\| shows Z1's effect more strongly than the bottom third |
+| Z4 | On dealer-long days, price closes nearer the 14:30 pin strike than at 14:30, more than for strikes two away |
+| Z5 | The hedge flow that gamma forces (−gamma × last 15-minute move) points the way of the next 15 minutes |
+
+**Verdict rules:**
+- Verdicts start at 40 sessions (about late December 2026).
+- Sessions 1–20 are the design sample and are used only for data checks.
+- Sessions 21 onward are judged: PASS = the predicted direction with |t| ≥ 3.0 across sessions.
+
 ## 4. How a hypothesis passes
 
 1. **Frozen definitions.** The ones above; any change is versioned and dated.

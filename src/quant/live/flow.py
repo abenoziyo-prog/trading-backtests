@@ -93,6 +93,49 @@ def intervals(t: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+AM_ROOTS = ("SPX2", "NDX2")  # AM-settled monthlies (root SPX / NDX, no W / P): expired at the open, no gamma intraday
+
+
+def dealer_gamma_0dte(t: pd.DataFrame) -> pd.DataFrame:
+    """Dealers' same-day-expiry (0DTE) gamma at each capture, in $ of the underlying per 1% move, from one symbol-day
+    of captures (load_day). Three estimates, reported side by side because none is known to be right yet:
+      g_oi    open interest at the open with the naive sign (dealers long calls, short puts: calls +, puts -)
+      g_tick  -(customers' net contracts bought since the open) x gamma, customers' side from the tick proxy:
+              a customer buying any option (call or put) leaves the dealer short its gamma
+      g_iv    the same with the implied-volatility proxy
+      g_total g_oi + g_tick (the primary estimate of docs/GEX_FRAMEWORK.md section Z)
+    Gamma is Black-Scholes at each capture's IV and time to 16:00 (quant.live.gex). Also per capture: the 0DTE strike
+    with the most open-interest-plus-traded gamma (pin), 0DTE contracts traded so far and the spot."""
+    from quant.live.gex import bs_gamma
+    f = contract_flow(t[t.dte == 0])
+    f = f[~f.occ.str.startswith(AM_ROOTS) & f.iv.notna() & (f.strike > 0)].copy()
+    if f.empty:
+        return pd.DataFrame()
+    f = f.sort_values(["occ", "asof"])
+    g = f.groupby("occ", sort=False)
+    f["cum_tick"] = (f.traded.fillna(0) * f.side_tick).groupby(f.occ).cumsum()
+    f["cum_iv"] = (f.traded.fillna(0) * f.side_iv).groupby(f.occ).cumsum()
+    f["oi0"] = g.open_interest.transform("first")
+    f["gam"] = bs_gamma(f.spot.to_numpy(), f.strike.to_numpy(), f.iv.to_numpy(), _years(f))
+    scale = f.gam * f.multiplier * f.spot ** 2 * 0.01
+    sign = np.where(f.put_call == "CALL", 1.0, -1.0)
+    f["g_oi"], f["g_tick"], f["g_iv"] = sign * f.oi0 * scale, -f.cum_tick * scale, -f.cum_iv * scale
+    f["g_abs"] = (f.oi0 + f.volume.fillna(0)) * scale
+    k = f.groupby("asof")
+    out = pd.DataFrame(dict(spot=k.spot.first(), g_oi=k.g_oi.sum(), g_tick=k.g_tick.sum(), g_iv=k.g_iv.sum(),
+                            traded=k.volume.sum(),
+                            pin=k.apply(lambda x: x.groupby("strike").g_abs.sum().idxmax(), include_groups=False)))
+    out["g_total"] = out.g_oi + out.g_tick
+    return out
+
+
+def _years(f: pd.DataFrame) -> np.ndarray:
+    """Years from each row's capture time to 16:00 ET that day (at least 15 minutes), for same-day expiries."""
+    a = f["asof"]
+    mins = (a.dt.normalize() + pd.Timedelta(hours=16) - a).dt.total_seconds().to_numpy() / 60
+    return np.maximum(mins, 15.0) / (365 * 24 * 60)
+
+
 def oi_change(today: pd.DataFrame, next_day: pd.DataFrame) -> pd.DataFrame:
     """Per contract: today's volume and the change in open interest published the next morning (opening ratio)."""
     a = today.sort_values("asof").groupby("occ").agg(put_call=("put_call", "first"), expiry=("expiry", "first"),

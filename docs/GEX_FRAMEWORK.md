@@ -48,6 +48,19 @@ Each hypothesis is defined against a **placebo**, because every strike is a roun
 | R3 | Distance below the flip predicts the size of the move | \|close − open\| / ATR vs spot-vs-flip % | Rank correlation |
 | R4 | SPX and NDX regimes combined: both negative gives the largest NQ ranges. When they disagree, NQ's beta to ES changes | Range by the four combinations; NQ/ES beta per day | — |
 
+**Historical check, 2026-10-28** (`scripts/gex_regime_history.py`, `reports/gex/GEX_REGIME_HISTORY.md`). S&P GEX from
+SqueezeMetrics (free, daily since 2011) stands in for the Nasdaq. The rules were pre-registered in the script, with
+design 2011–2020 and the 2021–2026 holdout judged once.
+- **R1 passes.** With the previous day's GEX in the bottom third of its 252-day range, NQ's US-session range was 1.23×
+  the top third's, measured relative to the VIX expected move (holdout t = +7.3; design 1.34×, t = +11.9). Negative GEX
+  vs positive gave 1.17× (t = +4.4). The same held for range / ATR20. So GEX says something about the day's size that
+  VIX alone does not.
+- **R2 fails.** The trend vs mean-reversion measures, VR(12) and |close − open| / range, differ little and not
+  significantly. Low gamma makes days bigger but not more directional.
+- **Effect by year:** present in 12 of 15 years. It is weak in 2023, 2024 and 2026 (to date) and strong in 2018 and 2025.
+Live use stays pending: a range expectation (stops, targets, size) is the natural use, and it needs its own
+pre-registered test against the live strategies.
+
 ### Walls and pins (intraday levels)
 
 | ID | Hypothesis | Measure | Control |

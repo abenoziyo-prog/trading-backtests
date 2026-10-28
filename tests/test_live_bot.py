@@ -502,3 +502,12 @@ def test_night_engine_books():
     assert drift.exit == 95 and drift.exit_reason == "stop"
     ev = eng.close()
     assert ev[-1].kind == "night_end" and eng.closed
+
+
+def test_runner_jobs_time_out(monkeypatch):
+    cr = _runner()
+
+    def hang(*a, **k):
+        raise cr.subprocess.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
+    monkeypatch.setattr(cr.subprocess, "run", hang)
+    assert cr.run_job("schwab_archiver.py", 5) is None          # a hung job is stopped, the runner carries on

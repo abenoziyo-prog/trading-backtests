@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT / "src"))
 NY = ZoneInfo("America/New_York")
 GEX_SLOTS = [(9, 20), (16, 20)]  # before the open (fresh open interest) and after the intraday capture has ended
 FLOW_START, FLOW_END, FLOW_MAX_STARTS = (9, 25), (16, 15), 5
+ARCHIVE_TIMEOUT_S = 1200   # the nightly archive takes a minute or two; 20 minutes means something hung
 SYNC_DIRS = ["state/nqbot", "data/schwab"]
 SKIP = {".tmp"}  # half-written files are never saved
 # write-once archives the container never reads back: kept in the database, not restored (saves memory and time)
@@ -143,6 +144,16 @@ def gex_due(now: datetime, done: set[str], cal) -> str | None:
     return None
 
 
+def run_job(script: str, timeout: float, *args: str) -> int | None:
+    """Run one of the bots/ jobs and wait for it, at most `timeout` seconds (a hung Schwab or web request must never
+    stall the runner: while it waits, nothing is saved and the bot is not watched). None = timed out (killed)."""
+    try:
+        return subprocess.run([sys.executable, str(ROOT / "bots" / script), *args], cwd=ROOT, timeout=timeout).returncode
+    except subprocess.TimeoutExpired:
+        log.warning("%s timed out after %.0f s and was stopped", script, timeout)
+        return None
+
+
 def flow_due(now: datetime, cal) -> bool:
     """The intraday option capture should be running now (trading day, 09:25-16:15 ET)."""
     return cal.is_trading_day(now.date()) and FLOW_START <= (now.hour, now.minute) < FLOW_END
@@ -192,14 +203,12 @@ def main() -> None:
         first_archive = last_arch is None and not any((ROOT / "data" / "schwab").glob("*.parquet"))
         if not spx_tried and not (ROOT / "data" / "schwab" / "gex" / "spx_gex_squeezemetrics.csv").exists():
             spx_tried = True                                  # first start without a copy: fetch it now (small, no pandas)
-            r = subprocess.run([sys.executable, str(ROOT / "bots" / "fetch_spx_gex.py")], cwd=ROOT, timeout=120)
-            log.info("S&P GEX history (SqueezeMetrics) fetched with code %d", r.returncode)
+            log.info("S&P GEX history (SqueezeMetrics) fetched with code %s", run_job("fetch_spx_gex.py", 120))
         if first_archive or archive_due(now, last_arch):  # first start: back-fill Schwab's ~6 weeks right away
             last_arch = now.date().isoformat()
-            r = subprocess.run([sys.executable, str(ROOT / "bots" / "schwab_archiver.py")], cwd=ROOT)
-            log.info("archiver finished with code %d", r.returncode)
-            r = subprocess.run([sys.executable, str(ROOT / "bots" / "fetch_spx_gex.py")], cwd=ROOT, timeout=120)
-            log.info("S&P GEX history (SqueezeMetrics) fetched with code %d", r.returncode)
+            log.info("saved %d changed files before the archive", sync.save())     # nothing waits on a long job unsaved
+            log.info("archiver finished with code %s", run_job("schwab_archiver.py", ARCHIVE_TIMEOUT_S))
+            log.info("S&P GEX history (SqueezeMetrics) fetched with code %s", run_job("fetch_spx_gex.py", 120))
             try:
                 log.info("database size %.0f MB", store.size_mb())
             except Exception:
@@ -216,11 +225,7 @@ def main() -> None:
         slot = gex_due(now, gex_done, cal) if flow is None else None  # never alongside the capture (memory)
         if slot:
             gex_done.add(slot)
-            try:
-                r = subprocess.run([sys.executable, str(ROOT / "bots" / "gex_snapshot.py")], cwd=ROOT, timeout=600)
-                log.info("GEX snapshot %s finished with code %d", slot, r.returncode)
-            except subprocess.TimeoutExpired:
-                log.warning("GEX snapshot %s timed out", slot)
+            log.info("GEX snapshot %s finished with code %s", slot, run_job("gex_snapshot.py", 600))
             next_sync = 0
         if time.time() >= next_sync:
             n = sync.save()

@@ -1,9 +1,8 @@
 """Turn-of-month long (pre-registered 2026-10-28, reports/new_ideas_2026-10-28/PREREGISTRATION.md)."""
 from datetime import timedelta
+from functools import lru_cache
 
 import pandas as pd
-
-from quant.live.calendar import Calendar
 
 NAME = "tom_long"
 SESSION = "us"
@@ -12,7 +11,12 @@ HYPOTHESIS = ("Long at the 09:30 open on the last trading day of the month and t
               "1988; McConnell & Xu 2008).")
 PARAMS = dict(before=1, after=3, stop_r=0.5)
 NEIGHBORS = [dict(stop_r=0.25), dict(stop_r=1.0), dict(after=2), dict(after=4)]
-CAL = Calendar()
+
+
+@lru_cache(maxsize=1)
+def _calendar():
+    from quant.live.calendar import Calendar  # imported on use: CI loads idea files without the package on the path
+    return Calendar()
 
 
 def tom_day(day, before: int, after: int) -> bool:
@@ -20,12 +24,12 @@ def tom_day(day, before: int, after: int) -> bool:
     d = day.date() if hasattr(day, "date") else day
     k, x = 0, d
     while (x := x - timedelta(days=1)).month == d.month:
-        k += CAL.is_trading_day(x)
+        k += _calendar().is_trading_day(x)
     if k < after:
         return True
     k, x = 0, d
     while (x := x + timedelta(days=1)).month == d.month:
-        k += CAL.is_trading_day(x)
+        k += _calendar().is_trading_day(x)
     return k < before
 
 

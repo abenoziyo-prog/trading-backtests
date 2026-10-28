@@ -133,3 +133,17 @@ def test_empty_chunks_keep_numeric_types():
     assert len(empty) == 0 and empty.strike.dtype == float
     c = pd.concat([empty, contracts(chain(call_oi={600: 1000}))], ignore_index=True)
     assert summary(c, 600.0, asof, "QQQ")["net_gex"] > 0
+
+
+def test_expired_contracts_are_left_out_after_the_close():
+    ch = chain(call_oi={600: 1000})
+    today = {"2026-10-27:0": {"600.0": [dict(putCall="CALL", strikePrice=600.0, expirationDate="2026-10-27T20:00:00.000+00:00",
+                                              daysToExpiration=0, openInterest=50000, totalVolume=5, volatility=20.0, gamma=0.5,
+                                              delta=0.5, bid=1, ask=1.1, mark=1.05, multiplier=100.0)]}}
+    ch["callExpDateMap"].update(today)
+    c = contracts(ch)
+    before = summary(c, 600.0, datetime(2026, 10, 27, 15, 50, tzinfo=NY), "QQQ")
+    after = summary(c, 600.0, datetime(2026, 10, 27, 16, 20, tzinfo=NY), "QQQ")
+    alone = summary(contracts(chain(call_oi={600: 1000})), 600.0, datetime(2026, 10, 27, 16, 20, tzinfo=NY), "QQQ")
+    assert before["net_gex_0dte"] > 0 and before["net_gex"] > 10 * after["net_gex"]
+    assert after["net_gex_0dte"] == 0 and after["net_gex"] == alone["net_gex"] and after["expiries"] == 1

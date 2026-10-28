@@ -10,6 +10,7 @@ estimate of the sign, not a measurement.
   gamma flip          the underlying price where net GEX crosses zero, found by re-pricing every contract's gamma
                       (Black-Scholes, its own implied volatility) across spot +/- 10%; the crossing nearest spot
   call wall / put wall  strike with the largest call GEX / the largest (negative) put GEX
+Contracts already expired at the snapshot time (today's expiries after 16:00) are left out.
 Gamma is computed from each contract's implied volatility (Schwab's 'volatility' field) so the value at spot and the
 flip profile are consistent; Schwab's own gamma is kept in the raw rows for reference. Open interest is as of the
 previous close (exchanges publish it once a day).
@@ -73,7 +74,11 @@ def gex_at(c: pd.DataFrame, spot: float, t: np.ndarray) -> np.ndarray:
 def summary(c: pd.DataFrame, spot: float, asof: datetime, symbol: str) -> dict:
     num = [k for k in COLS if k not in ("put_call", "expiry")]
     c = c.astype({k: float for k in num if k in c})
-    c = c[(c.open_interest > 0) & c.iv.notna() & (c.strike > 0)].reset_index(drop=True)
+    c = c[(c.open_interest > 0) & c.iv.notna() & (c.strike > 0)]
+    # contracts that have expired by `asof` carry no gamma: earlier days, and today's once the 16:00 close has passed
+    # (the chain still lists today's expiries after the close; counted at the 15-minute floor they swamped the totals)
+    exp = pd.to_datetime(c.expiry).dt.date
+    c = c[(exp > asof.date()) | ((exp == asof.date()) & (asof.time() < time(16)))].reset_index(drop=True)
     out = dict(asof=asof.isoformat(timespec="minutes"), symbol=symbol, spot=round(spot, 2), contracts=len(c))
     if c.empty:
         return out

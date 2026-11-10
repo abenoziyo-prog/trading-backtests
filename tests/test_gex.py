@@ -256,4 +256,6 @@ def test_local_env_defaults_and_readable_0dte_lines(tmp_path):
     assert "NEGATIVE" in text and "-1.50bn" in text and "7750 (4,000), 7800 (2,500)" in text and "7650 (6,000)" in text
     assert "no 0DTE data" in snap.describe(dict(symbol="$NDX", error="boom"))
     early = snap.describe(dict(symbol="$SPX", expiry="2026-11-10", dte=0, listed=574, contracts=0))
-    assert "574 contracts" in early and "run again" in early
+    assert "574 contracts" in early and "--wait" in early
+    assert snap.oi_missing([dict(symbol="$SPX", listed=574, contracts=0), dict(symbol="$NDX", listed=9, contracts=9)])
+    assert not snap.oi_missing([dict(symbol="$SPX", listed=574, contracts=300), dict(symbol="$NDX", error="boom")])

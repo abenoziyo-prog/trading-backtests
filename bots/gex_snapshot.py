@@ -44,6 +44,7 @@ NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "gex"
 SYMBOLS = ["QQQ", "$NDX", "SPY", "$SPX"]  # /NQ futures options: the chains endpoint answers 400 (checked 2026-10-27)
 ZERO_DTE = ["$SPX", "$NDX"]  # the nearest-expiry summary (gex_0dte.csv); both have an expiry every trading day
+RETRY_S = 300  # --wait: seconds between tries while the API reports no open interest
 ZERO_DTE_LOOKAHEAD = 6  # days searched for the nearest expiry (covers a long weekend)
 CHUNK_DAYS = 3  # expiry days per request: keeps each response small (the container has 256 MB)
 
@@ -134,11 +135,17 @@ def load_env(root: Path = ROOT, env=os.environ) -> None:
     env.setdefault("SCHWAB_TOKEN_PATH", str(root / "state" / "nqbot" / "schwab_token.json"))
 
 
+def oi_missing(zrows: list[dict]) -> bool:
+    """True when Schwab listed contracts for a symbol but reported open interest 0 on every one of them."""
+    return any(not z.get("error") and z.get("listed") and not z.get("contracts") for z in zrows)
+
+
 def describe(z: dict) -> str:
     """One 0DTE row as a few readable lines for the terminal."""
     if not z.get("error") and not z.get("contracts") and z.get("listed"):
-        return (f"{z['symbol']}: Schwab lists {z['listed']} contracts for {z['expiry']} but every open interest is 0. "
-                "The overnight figures are not loaded yet: run again closer to 09:20 New York time.")
+        return (f"{z['symbol']}: Schwab lists {z['listed']} contracts for {z['expiry']} but its API reports open interest 0 "
+                "on all of them. The API leaves that field empty for every expiry early in the day, although Schwab's own "
+                "screens show it. Run again later, or use --wait to keep trying.")
     if z.get("error") or not z.get("contracts"):
         return f"{z['symbol']}: no 0DTE data ({z.get('error') or 'no live expiry with open interest'})"
 
@@ -161,6 +168,8 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=30, help="expirations up to this many days ahead")
     ap.add_argument("--strikes", type=int, default=120, help="strikes around the money, both sides together (~60 each side)")
     ap.add_argument("--zero-dte", nargs="*", default=ZERO_DTE, help="symbols for the nearest-expiry summary (none: skip)")
+    ap.add_argument("--wait", type=float, default=0, metavar="MINUTES",
+                    help="0DTE rows: while Schwab's API reports open interest 0, try again every 5 minutes for this long")
     ap.add_argument("--zero-dte-only", action="store_true", help="skip the 30-day chains; only the 0DTE rows")
     a = ap.parse_args()
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_TOKEN_PATH") if not os.environ.get(k)]
@@ -183,13 +192,21 @@ def main() -> None:
     if rows:
         append_csv(OUT / "gex_daily.csv", log)
         print(log.to_string(index=False))
-    zrows = []
-    for sym in a.zero_dte:
-        try:
-            zrows.append(snapshot_0dte(client, sym, now))
-        except Exception as exc:  # the 0DTE rows are an extra: a failure here never fails the snapshot job
-            zrows.append(dict(asof=now.isoformat(timespec="minutes"), symbol=sym, error=repr(exc)[:300]))
-        time.sleep(0.5)
+    deadline = time.monotonic() + 60 * a.wait
+    while True:
+        zrows = []
+        for sym in a.zero_dte:
+            try:
+                zrows.append(snapshot_0dte(client, sym, now))
+            except Exception as exc:  # the 0DTE rows are an extra: a failure here never fails the snapshot job
+                zrows.append(dict(asof=now.isoformat(timespec="minutes"), symbol=sym, error=repr(exc)[:300]))
+            time.sleep(0.5)
+        if not oi_missing(zrows) or time.monotonic() >= deadline:
+            break
+        print(f"{datetime.now(NY):%H:%M} New York: Schwab's API still reports open interest 0; trying again in "
+              f"{RETRY_S // 60} minutes (Ctrl-C to stop)", flush=True)
+        time.sleep(RETRY_S)
+        now = datetime.now(NY)
     if zrows:
         z = pd.DataFrame(zrows)
         append_csv(OUT / "gex_0dte.csv", z)

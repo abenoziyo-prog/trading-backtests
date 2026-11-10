@@ -411,6 +411,56 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     from quant.live.gex_map import write_frame
     nq = live.cycle(client, live.Session("/NQ", 60, index="NDX"), "$NDX", now, {}, tmp_path)
     assert nq["M"]["index"] == "NDX" and nq["M"]["thin"] is True and (tmp_path / "live" / "nq_map.html").exists()
-    write_frame(tmp_path / "live" / "live_map.html", ["/ES", "/NQ"])
+    write_frame(tmp_path / "live" / "live_map.html", [("/ES", "SPX"), ("/NQ", "NDX"), ("/ES", "SPY"), ("/NQ", "QQQ")])
     frame = (tmp_path / "live" / "live_map.html").read_text(encoding="utf-8")
-    assert frame.index("es_map.html") < frame.index("nq_map.html")
+    assert frame.index("es_map.html") < frame.index("nq_map.html") < frame.index("es_spy_map.html") < frame.index("nq_qqq_map.html")
+
+
+def test_live_cycle_moves_etf_strikes_onto_the_future_by_the_price_ratio(tmp_path):
+    import importlib.util
+    import json
+    from pathlib import Path
+    import pandas as pd
+    spec = importlib.util.spec_from_file_location("gex_live2", Path(__file__).resolve().parents[1] / "bots/gex_live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    live.snap.time.sleep = lambda s: None
+    ms = lambda *a: int(datetime(*a, tzinfo=NY).timestamp() * 1000)  # noqa: E731
+
+    class Resp:
+        def __init__(self, d):
+            self.d = d
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return json.loads(json.dumps(self.d))
+
+    def side(pc):   # a SPY-like same-day chain: strikes 765-779, underlying 772
+        oi = {"CALL": {772: 900, 775: 4000}, "PUT": {770: 1200, 768: 6000}}[pc]
+        m = {"2026-10-27:0": {f"{k:.1f}": [dict(putCall=pc, strikePrice=k, expirationDate="2026-10-27T20:00:00.000+00:00",
+                                               daysToExpiration=0, openInterest=oi.get(k, 0), totalVolume=5, volatility=15.0,
+                                               gamma=0.1, delta=0.5, bid=1, ask=1.1, mark=1.05, multiplier=100.0)]
+                              for k in range(765, 780)}}
+        key = "callExpDateMap" if pc == "CALL" else "putExpDateMap"
+        return {"symbol": "SPY", "underlyingPrice": 772.0, key: m, "putExpDateMap" if pc == "CALL" else "callExpDateMap": {}}
+
+    class Fake:
+        def get_option_chain(self, symbol, contract_type=None, **k):
+            return Resp(side(contract_type.value))
+
+        def get_price_history_every_minute(self, symbol, **k):
+            px = {"SPY": 772.0, "/ES": 7758.6}[symbol]      # ratio 10.05
+            return Resp(dict(candles=[dict(datetime=ms(2026, 10, 27, 9, 18), open=px, high=px, low=px, close=px)]))
+
+    client = ReadOnlyClient(Fake(), extra=ReadOnlyClient.MARKET_DATA)
+    ses, state = live.Session("/ES", 60, index="SPY"), {}
+    d = live.cycle(client, ses, "SPY", datetime(2026, 10, 27, 9, 20, tzinfo=NY), state, tmp_path)
+    m = d["M"]
+    assert state["basis"] == 0.0 and round(state["ratio"], 4) == 10.05 and m["ratio"] == 10.05 and m["index"] == "SPY"
+    assert m["spot"] == 772.0 and m["futLast"] == 7758.6 and m["callWall"] in (772.0, 775.0)
+    assert d["H"][0]["cw"] == round(m["callWall"] * 10.05, 2)                       # history is on the future's scale
+    assert (tmp_path / "live" / "es_spy_map.html").exists()
+    row = pd.read_csv(tmp_path / "gex_live.csv").iloc[-1]
+    assert row.fut_call_wall == round(m["callWall"] * 10.05, 2) and row.ratio == 10.05

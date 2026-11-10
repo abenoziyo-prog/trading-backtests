@@ -1,7 +1,7 @@
 """Live ES dealer map: turns successive 0DTE chain snapshots into one self-refreshing HTML page.
 
 Session keeps the snapshots of one run and, for each new one, builds the page data: the levels moved onto the future
-(level + basis), gamma / vanna / charm per strike, and what changed since the previous snapshot, about five minutes
+(index: level + basis; ETF: strike x ratio), gamma / vanna / charm per strike, and what changed since the previous snapshot, about five minutes
 ago and the first snapshot. Open interest does not change during the day, so "new positioning" is read from volume:
 contracts traded per strike between two snapshots. Volume does not say who bought and who sold.
 """
@@ -22,6 +22,12 @@ TOP = 8              # strikes listed in the "what changed" table
 DELTA_KEYS = ("futLast", "spot", "indexQuote", "flip", "callWall", "putWall", "net", "cg", "pg", "vex", "chx", "callVol", "putVol")
 
 
+def _lvl(snap: dict, key: str) -> float | None:
+    """One level of a snapshot's summary row on the future: level * ratio + basis."""
+    v = snap["z"].get(key)
+    return None if v is None or pd.isna(v) else float(v) * snap["ratio"] + snap["basis"]
+
+
 def _f(x, nd=2):
     return None if x is None or pd.isna(x) else round(float(x), nd)
 
@@ -39,11 +45,12 @@ class Session:
         return old[-1] if old else None
 
     def add(self, now: datetime, z: dict, table: pd.DataFrame, fut_last: float, basis: float, basis_note: str,
-            index_quote: float | None = None, fetch_s: float | None = None) -> dict:
+            index_quote: float | None = None, fetch_s: float | None = None, ratio: float = 1.0) -> dict:
         """Register one snapshot (z = zero_dte row and table = strike_table, both computed at the index price
-        fut_last - basis) and return the data the page shows."""
+        (fut_last - basis) / ratio) and return the data the page shows. A level on the future is level * ratio + basis:
+        an index uses ratio 1 and its basis, an ETF (SPY, QQQ) basis 0 and the price ratio future / ETF."""
         vol = table[["call_volume", "put_volume"]].copy()
-        self.snaps.append(dict(t=now, z=z, vol=vol, fut=fut_last, basis=basis))
+        self.snaps.append(dict(t=now, z=z, vol=vol, fut=fut_last, basis=basis, ratio=ratio))
         first, prev, five = self.snaps[0], (self.snaps[-2] if len(self.snaps) > 1 else None), self._back(5)
 
         def dv(old: dict | None, col: str) -> pd.Series:
@@ -70,11 +77,11 @@ class Session:
                        cv=int(t.at[k, "call_volume"]), pv=int(t.at[k, "put_volume"]), co=int(t.at[k, "call_oi"]), po=int(t.at[k, "put_oi"]))
                   for k in act.index[:TOP] if act[k] > 0]
         hist = [dict(t=s["t"].strftime("%H:%M"), fut=_f(s["fut"]), net=_f((s["z"].get("net_gex") or 0) / 1e9, 3),
-                     flip=_f(None if s["z"].get("gamma_flip") is None else s["z"]["gamma_flip"] + s["basis"]),
-                     cw=_f(None if s["z"].get("call_wall") is None else s["z"]["call_wall"] + s["basis"]),
-                     pw=_f(None if s["z"].get("put_wall") is None else s["z"]["put_wall"] + s["basis"])) for s in self.snaps]
+                     flip=_f(_lvl(s, "gamma_flip")),
+                     cw=_f(_lvl(s, "call_wall")),
+                     pw=_f(_lvl(s, "put_wall"))) for s in self.snaps]
         m = dict(asof=now.isoformat(timespec="seconds"), clock=now.strftime("%H:%M:%S"), day=now.strftime("%a %d %b %Y"),
-                 expiry=z.get("expiry"), spot=_f(spot), indexQuote=_f(index_quote), basis=_f(basis), basisNote=basis_note,
+                 expiry=z.get("expiry"), spot=_f(spot), indexQuote=_f(index_quote), basis=_f(basis), ratio=_f(ratio, 5), basisNote=basis_note,
                  future=self.future, index=self.index, thin=bool((z.get("call_oi") or 0) + (z.get("put_oi") or 0) < THIN_OI),
                  futLast=_f(fut_last), flip=_f(z.get("gamma_flip")), callWall=_f(z.get("call_wall")),
                  putWall=_f(z.get("put_wall")), net=_f(z.get("net_gex"), 0), regime=z.get("regime"),
@@ -96,16 +103,16 @@ class Session:
         for label, old in (("in the last 5 minutes", self._back(5)), (f"since {self.snaps[0]['t']:%H:%M}", self.snaps[0] if len(self.snaps) > 1 else None)):
             if old is None or old is cur:
                 continue
-            z, o, b = cur["z"], old["z"], cur["basis"]
+            z, o = cur["z"], old["z"]
             if z.get("regime") != o.get("regime") and z.get("regime") and o.get("regime"):
                 out.append(f"Regime changed from {o['regime']} to {z['regime']} {label}.")
             for key, name in (("call_wall", "Call wall"), ("put_wall", "Put wall")):
                 if z.get(key) is not None and o.get(key) is not None and z[key] != o[key]:
-                    out.append(f"{name} moved from {o[key] + old['basis']:,.2f} to {z[key] + b:,.2f} {label}.")
+                    out.append(f"{name} moved from {_lvl(old, key):,.2f} to {_lvl(cur, key):,.2f} {label}.")
             if z.get("gamma_flip") is not None and o.get("gamma_flip") is not None:
-                d = (z["gamma_flip"] + b) - (o["gamma_flip"] + old["basis"])
+                d = _lvl(cur, "gamma_flip") - _lvl(old, "gamma_flip")
                 if abs(d) >= 3:
-                    out.append(f"Gamma flip moved {d:+,.2f} points to {z['gamma_flip'] + b:,.2f} {label}.")
+                    out.append(f"Gamma flip moved {d:+,.2f} points to {_lvl(cur, 'gamma_flip'):,.2f} {label}.")
             if z.get("net_gex") is not None and o.get("net_gex") is not None:
                 d = (z["net_gex"] - o["net_gex"]) / 1e9
                 if abs(d) >= 0.25:
@@ -136,15 +143,16 @@ def write(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
-def page_name(future: str) -> str:
-    """File name of one future's page: /ES -> es_map.html."""
-    return future.strip("/").lower() + "_map.html"
+def page_name(future: str, index: str = "") -> str:
+    """File name of one map: /ES from SPX -> es_map.html (the same for /NQ from NDX), /ES from SPY -> es_spy_map.html."""
+    etf = "" if index.upper() in ("", "SPX", "NDX") else "_" + index.lower()
+    return future.strip("/").lower() + etf + "_map.html"
 
 
-def write_frame(path: Path, futures: list[str]) -> None:
-    """One page that shows each future's map side by side (the first on the left); each map reloads itself."""
-    panes = "".join(f'<iframe src="{page_name(f)}" title="{f.strip("/")} dealer map"></iframe>' for f in futures)
-    title = " and ".join(f.strip("/") for f in futures)
+def write_frame(path: Path, maps: list[tuple[str, str]]) -> None:
+    """One page that shows the maps, given as (future, index), two to a row: the first on the left. Each reloads itself."""
+    panes = "".join(f'<iframe src="{page_name(f, i)}" title="{f.strip("/")} dealer map from {i}"></iframe>' for f, i in maps)
+    title = " and ".join(dict.fromkeys(f.strip("/") for f, _ in maps))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -152,8 +160,9 @@ def write_frame(path: Path, futures: list[str]) -> None:
 <style>
 html,body{{margin:0;height:100%;background:#f6f6f4}}
 @media (prefers-color-scheme:dark){{html,body{{background:#111110}}}}
-.panes{{display:flex;height:100vh;gap:1px;background:#8a898455}}
-iframe{{flex:1 1 0;min-width:0;height:100%;border:0;background:transparent}}
-@media (max-width:900px){{.panes{{flex-direction:column;height:auto}}iframe{{height:92vh;flex:none}}}}
+.panes{{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#8a898455}}
+iframe{{width:100%;min-width:0;height:100vh;border:0;background:#f6f6f4;display:block}}
+@media (prefers-color-scheme:dark){{iframe{{background:#111110}}}}
+@media (max-width:900px){{.panes{{grid-template-columns:1fr}}iframe{{height:92vh}}}}
 </style></head><body><div class="panes">{panes}</div></body></html>
 """, encoding="utf-8")

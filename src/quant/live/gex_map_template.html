@@ -119,17 +119,19 @@ h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8
 <div class="tip" id="tip" hidden></div>
 <script>
 const D=/*DATA*/null;
-const M=D.M, R=D.R, B=M.basis, F=M.future.replace('/',''), IX=M.index||'SPX';
+const M=D.M, R=D.R, B=M.basis, A=M.ratio||1, ETF=A!==1, F=M.future.replace('/',''), IX=M.index||'SPX';
 const $=i=>document.getElementById(i), f=n=>n==null?'n/a':n.toLocaleString('en-US',{maximumFractionDigits:2}), f0=n=>n==null?'n/a':Math.round(n).toLocaleString('en-US'), sg=n=>n==null?'n/a':(n>0?'+':n<0?'\u2212':'')+f(Math.abs(n));
-const E=k=>k==null?null:k+B;
+const MAP=ETF?`the price ratio ${A.toFixed(4)} (${F} \u00f7 ${IX}, ${M.basisNote})`:`the basis of ${sg(B)} points (${M.basisNote})`;
+const E=k=>k==null?null:k*A+B;
 const P=M.prev;
 // change against the previous fetch, in brackets: green when higher, red when lower
 function dl(a,b,scale,unit){if(!P||a==null||b==null)return'';const d=(a-b)/(scale||1), r=Math.round(d*100)/100;return ` <em class="dl ${r>0?'up':r<0?'dn':''}">(${r===0?'0':sg(r)}${unit||''})</em>`}
 const dk=(k,scale,unit)=>P?dl(M[k],P[k],scale,unit):'';
 const store={get(k,d){try{return localStorage.getItem('gexmap.'+k)||d}catch(e){return d}},set(k,v){try{localStorage.setItem('gexmap.'+k,v)}catch(e){}}};
 const S={mode:store.get('mode','split'),win:store.get('win',M.snaps>5?'5':'1')};
-$('h1').textContent=`${F} dealer map, live`;
-$('sub').textContent=`${IX} options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by the basis of ${sg(B)} points (${M.basisNote})`;
+$('h1').textContent=`${F} dealer map from ${IX}, live`;
+document.title=`${F} from ${IX} (live)`;
+$('sub').textContent=`${IX} options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by ${MAP}`;
 const age=()=>Math.round((Date.now()-new Date(M.asof).getTime())/1000);
 function status(){const a=age(), stale=a>Math.max(3*M.every,180);
  $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+Math.round(a/60)+' minutes old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span>${M.prevClock?'<span>brackets: change since <b>'+M.prevClock+'</b></span>':''}<span>every ${M.every}s, page reloads every ${M.refresh}s</span>`}
@@ -138,9 +140,9 @@ $('reg').textContent=(M.regime||'unknown')+' gamma';
 if(M.regime!=='positive')$('pill').classList.add('neg');
 $('net').innerHTML=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn'+dk('net',1e9,'bn');
 if(M.thin){const w=document.createElement('p');w.className='sub';w.innerHTML=`<b style="color:var(--dn)">Thin positioning:</b> only ${f0(M.callOi+M.putOi)} contracts of open interest in this expiry. Treat these levels as unreliable.`;$('levels').before(w)}
-$('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.spot-M.flip))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
+$('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.futLast-E(M.flip)))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
 const firstOi=s=>{if(!s)return[null,null];const[k,v]=s.split('|')[0].split(':');return[+k,+v]}, tc=firstOi(M.topCall), tp=firstOi(M.topPut);
-const lv=[[F+' last','<i class="key"></i>',f(M.futLast)+dk('futLast'),'index equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip))+dk('flip'),IX+' '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall))+dk('callWall'),IX+' '+f0(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall))+dk('putWall'),IX+' '+f0(M.putWall)],['Basis','',sg(B),M.basisNote],[IX+' quote','',f(M.indexQuote)+dk('indexQuote'),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn'+dk('cg',1e3,'bn'),'all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn'+dk('pg',1e3,'bn'),'all strikes'],['Net vanna','',sg(M.vex)+'M'+dk('vex',1,'M'),'per +1 vol point'],['Net charm','',sg(M.chx)+'M'+dk('chx',1,'M'),'per hour'],['Volume today','',f0(M.callVol+M.putVol)+(P?dl(M.callVol+M.putVol,P.callVol+P.putVol):''),f0(M.callVol)+dk('callVol')+' calls, '+f0(M.putVol)+dk('putVol')+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
+const lv=[[F+' last','<i class="key"></i>',f(M.futLast)+dk('futLast'),IX+' equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip))+(P?dl(E(M.flip),E(P.flip)):''),IX+' '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall))+(P?dl(E(M.callWall),E(P.callWall)):''),IX+' '+f(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall))+(P?dl(E(M.putWall),E(P.putWall)):''),IX+' '+f(M.putWall)],(ETF?['Ratio','',A.toFixed(4),F+' \u00f7 '+IX+', '+M.basisNote]:['Basis','',sg(B),M.basisNote]),[IX+' quote','',f(M.indexQuote)+dk('indexQuote'),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn'+dk('cg',1e3,'bn'),'all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn'+dk('pg',1e3,'bn'),'all strikes'],['Net vanna','',sg(M.vex)+'M'+dk('vex',1,'M'),'per +1 vol point'],['Net charm','',sg(M.chx)+'M'+dk('chx',1,'M'),'per hour'],['Volume today','',f0(M.callVol+M.putVol)+(P?dl(M.callVol+M.putVol,P.callVol+P.putVol):''),f0(M.callVol)+dk('callVol')+' calls, '+f0(M.putVol)+dk('putVol')+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
 $('levels').innerHTML=lv.map(l=>`<div class="lv"><span>${l[1]}${l[0]}</span><b>${l[2]}</b><small>${l[3]}</small></div>`).join('');
 // what changed
 $('chgh').textContent=M.snaps<2?'First snapshot of this run: changes appear from the next one':`Most active strikes over the last ${M.win}, and level moves`;
@@ -161,7 +163,7 @@ function bar(x0,w,pos,yy,hh,fill,op){if(!(w>0))return'';w=Math.max(w,1);const rr
  return `<path d="${d}" fill="var(--${fill})" opacity="${op}"/>`}
 // kind: gex | vol | vx | ch ; main = labels in the right margin
 function ladder(o){const box=$(o.el);if(!rows.length){box.textContent='No strikes with data near the price.';return}
- const W=Math.max(280,Math.min(o.main?560:420,box.clientWidth||520)), nar=W<460, rh=o.main?12:11, mt=14, mb=26, ml=(nar?44:52)+(rows[0].k+B>=10000?8:0), mr=o.main?(nar?118:140):14, H=mt+mb+rows.length*rh;
+ const W=Math.max(280,Math.min(o.main?560:420,box.clientWidth||520)), nar=W<460, rh=o.main?12:11, mt=14, mb=26, ml=(nar?44:52)+(E(rows[0].k)>=10000?8:0), mr=o.main?(nar?118:140):14, H=mt+mb+rows.length*rh;
  if(o.kind==='vol'&&!rows.some(r=>r['dc'+S.win]+r['dp'+S.win]>0)){box.innerHTML='<p>No contracts traded near the price in this window.</p>';return}
  const y=k=>{const p=pos(k);return p==null?-999:mt+p*rh+rh/2}, two=(o.kind==='gex'&&S.mode==='split')||o.kind==='vol';
  const pr=r=>o.kind==='vol'?[r['dc'+S.win],-r['dp'+S.win]]:[r.cg,r.pg];
@@ -208,8 +210,8 @@ function draw(){
  ladder({el:'vchart',kind:'vx',aria:'Vanna exposure by level'});ladder({el:'cchart',kind:'ch',aria:'Charm exposure by level'});history()}
 document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{S[b.dataset.g]=b.dataset.v;store.set(b.dataset.g,b.dataset.v);draw()}));
 draw();let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(draw,120)});
-$('notes').innerHTML=[`Every level is the ${IX} level plus the basis of ${sg(B)} points (${M.basisNote}). The basis drifts by a point or two in a day, so read the levels as zones a few points wide.`,
- `Gamma, vanna and charm are computed at the index price implied by ${F} (last price minus the basis), so the map follows the future in real time, also before the cash open.`,
+$('notes').innerHTML=[(ETF?`Every level is the ${IX} strike times ${MAP}. One ${IX} dollar is about ${f(A)} ${F} points, so read the levels as zones a few points wide.`:`Every level is the ${IX} level plus ${MAP}. The basis drifts by a point or two in a day, so read the levels as zones a few points wide.`),
+ `Gamma, vanna and charm are computed at the index price implied by ${F} (last price mapped back to ${IX}), so the map follows the future in real time, also before the cash open.`,
  'Signs assume dealers are long calls and short puts. That is a convention, not a measurement, and it is least reliable for same-day options.',
  'Open interest is the overnight figure and does not change during the day. Volume shows where trading happens, not whether dealers bought or sold.',
  'Ladders show the strikes nearest the price (up to 90, within about 2.65% of it). Totals in the tiles use every strike.'].map(s=>`<li>${s}</li>`).join('');

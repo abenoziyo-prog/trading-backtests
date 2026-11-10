@@ -9,6 +9,13 @@ at 09:20 and 16:20 ET on trading days. For each symbol it saves the raw chain (e
 --strikes strikes around the money (Schwab counts both sides together), fetched a few expiry days and one contract type per request) and one summary row (net GEX, gamma flip, call/put walls: see
 src/quant/live/gex.py). A symbol Schwab does not serve is logged and skipped.
 Files: data/schwab/gex/<SYMBOL>/<YYYY-MM-DD_HHMM>.parquet and data/schwab/gex/gex_daily.csv.
+
+0DTE (--zero-dte, default $SPX and $NDX): one more request pair per symbol for the nearest live expiry alone, with NO
+strike limit, because the largest open-interest strikes of a same-day expiry often sit outside the +/- 60 strikes of the
+30-day chain. One row per symbol goes to data/schwab/gex/gex_0dte.csv (net GEX, positive / negative, flip, walls, the
+largest open-interest strikes of the calls and of the puts: quant.live.gex.zero_dte) and the raw rows to
+data/schwab/gex/<SYMBOL>_0DTE/<YYYY-MM-DD_HHMM>.parquet. The 09:20 row is the one for the session: the 16:20 row
+already describes the next session's expiry, on open interest that is one day old by then.
 """
 from __future__ import annotations
 
@@ -25,12 +32,14 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant.live.gex import contracts, spot_of, summary  # noqa: E402
+from quant.live.gex import contracts, drop_am_settled, spot_of, summary, zero_dte  # noqa: E402
 from quant.live.schwab_feed import ReadOnlyClient, make_client  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "gex"
 SYMBOLS = ["QQQ", "$NDX", "SPY", "$SPX"]  # /NQ futures options: the chains endpoint answers 400 (checked 2026-10-27)
+ZERO_DTE = ["$SPX", "$NDX"]  # the nearest-expiry summary (gex_0dte.csv); both have an expiry every trading day
+ZERO_DTE_LOOKAHEAD = 6  # days searched for the nearest expiry (covers a long weekend)
 CHUNK_DAYS = 3  # expiry days per request: keeps each response small (the container has 256 MB)
 
 
@@ -70,11 +79,51 @@ def snapshot(client: ReadOnlyClient, symbol: str, now: datetime, days: int, stri
     return summary(c, spot, now, symbol)
 
 
+def snapshot_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead: int = ZERO_DTE_LOOKAHEAD) -> dict:
+    """The nearest live expiry of `symbol` with every strike Schwab lists (no strike_count), calls and puts in separate
+    requests, one expiry day per request. Before 16:00 ET the search starts today (the 0DTE), afterwards tomorrow."""
+    from schwab.client import Client
+    CALL, PUT = Client.Options.ContractType.CALL, Client.Options.ContractType.PUT
+    day = now.date() if (now.hour, now.minute) < (16, 0) else now.date() + timedelta(days=1)
+    last = None
+    for _ in range(lookahead + 1):
+        parts, spot = [], None
+        try:
+            for ct in (CALL, PUT):
+                r = client.get_option_chain(symbol, contract_type=ct, include_underlying_quote=True, from_date=day,
+                                            to_date=day)
+                r.raise_for_status()
+                chain = r.json()
+                del r
+                spot = spot or spot_of(chain)
+                part = contracts(drop_am_settled(chain))   # a day without an expiry answers with empty maps (or FAILED)
+                if len(part):
+                    parts.append(part)
+                del chain
+                time.sleep(0.3)
+        except Exception as exc:  # a day Schwab refuses is skipped; the error is reported if no day works
+            last = exc
+        if parts and spot is not None:
+            c = pd.concat(parts, ignore_index=True)
+            d = OUT / (folder(symbol) + "_0DTE")
+            d.mkdir(parents=True, exist_ok=True)
+            c.assign(spot=spot, asof=now.isoformat(timespec="minutes")).to_parquet(d / f"{now:%Y-%m-%d_%H%M}.parquet")
+            return zero_dte(c, spot, now, symbol)
+        day += timedelta(days=1)
+    raise ValueError(f"no expiry found for {symbol} within {lookahead} days (last error: {last!r})")
+
+
+def append_csv(p: Path, log: pd.DataFrame) -> None:
+    old = pd.read_csv(p) if p.exists() else None
+    pd.concat([old, log], ignore_index=True).to_csv(p, index=False) if old is not None else log.to_csv(p, index=False)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbols", nargs="+", default=SYMBOLS)
     ap.add_argument("--days", type=int, default=30, help="expirations up to this many days ahead")
     ap.add_argument("--strikes", type=int, default=120, help="strikes around the money, both sides together (~60 each side)")
+    ap.add_argument("--zero-dte", nargs="*", default=ZERO_DTE, help="symbols for the nearest-expiry summary (none: skip)")
     a = ap.parse_args()
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_TOKEN_PATH") if not os.environ.get(k)]
     if missing:
@@ -91,10 +140,19 @@ def main() -> None:
         time.sleep(0.5)
     log = pd.DataFrame(rows)
     OUT.mkdir(parents=True, exist_ok=True)
-    p = OUT / "gex_daily.csv"
-    old = pd.read_csv(p) if p.exists() else None
-    pd.concat([old, log], ignore_index=True).to_csv(p, index=False) if old is not None else log.to_csv(p, index=False)
+    append_csv(OUT / "gex_daily.csv", log)
     print(log.to_string(index=False))
+    zrows = []
+    for sym in a.zero_dte:
+        try:
+            zrows.append(snapshot_0dte(client, sym, now))
+        except Exception as exc:  # the 0DTE rows are an extra: a failure here never fails the snapshot job
+            zrows.append(dict(asof=now.isoformat(timespec="minutes"), symbol=sym, error=repr(exc)[:300]))
+        time.sleep(0.5)
+    if zrows:
+        z = pd.DataFrame(zrows)
+        append_csv(OUT / "gex_0dte.csv", z)
+        print(z.to_string(index=False))
     if "error" in log and log.error.notna().all():
         sys.exit(1)
 

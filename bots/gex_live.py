@@ -2,16 +2,26 @@
 
     python bots/gex_live.py --open                    # ES from SPX, about every 1.1 seconds until 16:15 New York
     python bots/gex_live.py --symbols '$SPX' SPY      # a second map from SPY: about every 1.6 seconds
+    python bots/gex_live.py --open --stream           # /ES price from the quote stream: a snapshot about every 0.55 seconds
     python bots/gex_live.py --every 10                # slower
 
 Read-only, like bots/gex_snapshot.py: the only Schwab calls are the option chain and the future's price history
-(ReadOnlyClient.MARKET_DATA).
+(ReadOnlyClient.MARKET_DATA) and, with --stream, a quote subscription for the future (LEVELONE_FUTURES).
 
 Pace. A cycle is one request for the /ES price and one per symbol (calls and puts together): two for SPX. Schwab's
 limit is reported as 120 requests a minute (REQUEST_LIMIT); the loop spends --rate of them (default 110), which makes
 a cycle every 2 x 60 / 110 = 1.1 seconds. A cycle cannot be shorter than Schwab takes to answer, about a second. If
 Schwab does not answer the combined request with both sides, the loop asks for calls and puts separately from then on
 (three requests, 1.6 seconds). If Schwab answers 429 (too many requests) the loop slows down by half and says so.
+
+Requests do not wait for one another: a new one goes out on schedule while earlier answers are still on their way (at
+most MAX_FLIGHT at a time), so a slow answer does not delay the next snapshot. An answer that arrives after a newer one
+is dropped. While the access token is within two minutes of its renewal, requests go one at a time.
+
+--stream takes the /ES price from Schwab's quote stream instead of asking for it: the price is then the last trade at
+the moment a chain arrives, and a snapshot costs one request, so the same budget gives one every 0.55 seconds. While
+the stream is not connected the loop asks for the price as before. Schwab may allow one stream per login: do not use
+--stream while another program streams with the same Schwab login (the cloud /NQ bot does).
 
 Each cycle:
   1. the latest /ES price (the newest 1-minute candle, including the minute still forming)
@@ -35,9 +45,10 @@ import argparse
 import csv
 import os
 import sys
+import threading
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -50,13 +61,14 @@ sys.path.insert(0, str(ROOT / "bots"))
 import gex_snapshot as snap  # noqa: E402
 from quant.live.gex import futures_levels, strike_table, zero_dte  # noqa: E402
 from quant.live.gex_map import Session, page_name, write, write_frame  # noqa: E402
-from quant.live.schwab_feed import ReadOnlyClient, history_bars, make_client  # noqa: E402
+from quant.live.schwab_feed import LivePrice, ReadOnlyClient, history_bars, make_client, run_price_stream  # noqa: E402
 
 NY = snap.NY
 REQUEST_LIMIT = 120  # requests a minute, as reported for Schwab's market-data API (schwabdev documentation, not Schwab's own)
 DEFAULT_RATE = 110   # what the loop spends of it
 SOURCES = {"$SPX": "/ES", "SPY": "/ES"}  # option chain -> the future its levels are read on
 ETFS = ("SPY",)
+MAX_FLIGHT = 4       # snapshots whose answers may be awaited at the same time
 PRINT_EVERY = 15     # seconds between status lines in the terminal (--verbose prints every cycle)
 
 
@@ -216,12 +228,44 @@ def requests_per_cycle(states: list[dict]) -> int:
     return 1 + sum(2 if st.get("split") else 1 for st in states)
 
 
+def grab(client: ReadOnlyClient, runs: dict, future: str, now: datetime, out: Path, pool, live: LivePrice | None) -> dict:
+    """The network part of one snapshot, run in a worker thread: the future's price (from the stream when it is
+    connected, else one request) and every symbol's chain. Returns dict(now, px, chains, errors, fetch_s)."""
+    t0, errors, px = time.monotonic(), [], None
+    p = live.get() if live else None
+    px_job = None
+    if p is not None:
+        px = (p, now)
+    elif token_fresh(client):
+        px_job = pool.submit(last_price, client, future, now)
+    else:   # a token close to its renewal: alone and first, so the renewal happens in this one request
+        try:
+            px = last_price(client, future, now)
+        except Exception as exc:
+            errors.append(f"{future} price: {repr(exc)[:160]}")
+    jobs = {sym: pool.submit(fetch, client, sym, now, state, out) for sym, (_, state) in runs.items()}
+    if px_job is not None:
+        try:
+            px = px_job.result()
+        except Exception as exc:
+            errors.append(f"{future} price: {repr(exc)[:160]}")
+    chains = {}
+    for sym, job in jobs.items():
+        try:
+            chains[sym] = job.result()
+        except Exception as exc:  # one bad answer must not end the run or the other symbol
+            errors.append(f"{sym} chain: {repr(exc)[:160]}")
+    return dict(now=now, px=px, chains=chains, errors=errors, fetch_s=time.monotonic() - t0, polled=p is None)
+
+
 def main() -> None:
     snap.load_env()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbols", nargs="+", default=["$SPX"], choices=sorted(SOURCES), help="shown left to right")
     ap.add_argument("--rate", type=float, default=DEFAULT_RATE, help=f"requests a minute to spend (at most {REQUEST_LIMIT})")
     ap.add_argument("--every", type=float, default=0.0, help="seconds between snapshots; 0 (default) = as fast as --rate allows")
+    ap.add_argument("--stream", action="store_true",
+                    help="take the future's price from Schwab's quote stream instead of one request per snapshot")
     ap.add_argument("--until", default="16:15", help="New York time to stop at (HH:MM)")
     ap.add_argument("--open", action="store_true", help="open the page in the browser after the first snapshot")
     ap.add_argument("--verbose", action="store_true", help="print every cycle (default: a status line every 15 seconds)")
@@ -230,76 +274,96 @@ def main() -> None:
         if not os.environ.get(k):
             sys.exit(f"{k} is not set. Add it to {ROOT / '.env'}")
     symbols = list(dict.fromkeys(a.symbols))
-    every = interval(1 + len(symbols), a.rate, a.every)
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
                          extra=ReadOnlyClient.MARKET_DATA)
-    runs = {sym: (Session(SOURCES[sym], every, index=sym.strip("$")), {}) for sym in symbols}
     future = SOURCES[symbols[0]]
+    live, stop = (LivePrice() if a.stream else None), threading.Event()
+    if live is not None:
+        threading.Thread(target=run_price_stream, args=(client, future, live, stop), daemon=True).start()
+    runs = {sym: (Session(SOURCES[sym], 1.0, index=sym.strip("$")), {}) for sym in symbols}
+
+    def states() -> list[dict]:
+        return [st for _, st in runs.values()]
+
+    def pace(brake: float, streamed: bool) -> float:   # the stream saves the price request of every snapshot
+        return min(60.0, brake * interval(requests_per_cycle(states()) - (1 if streamed else 0), a.rate, a.every))
+
+    every = pace(1.0, False)
     page = snap.OUT / "live" / "live_map.html"
     write_frame(page, [(SOURCES[sym], sym.strip("$")) for sym in symbols])
     hh, mm = (int(x) for x in a.until.split(":"))
-    print(f"Live maps: {page}\nA snapshot every {every:.1f} seconds ({(1 + len(symbols)) * 60 / every:.0f} requests a minute). "
-          f"Open the page once, it updates in place. Ctrl-C stops.\n", flush=True)
-    opened, printed, slow, brake = False, 0.0, 0, 1.0
+    print(f"Live maps: {page}\nA snapshot every {every:.1f} seconds"
+          + (f", {interval(len(symbols), a.rate, a.every):.2f} once the {future} price stream is connected" if live else "")
+          + ". Open the page once, it updates in place. Ctrl-C stops.\n", flush=True)
+    opened, printed, brake, done_at, streaming, n_done = False, 0.0, 1.0, None, None, 0
+    pending: list = []
+    next_at = time.monotonic()
     try:
-        with ThreadPoolExecutor(len(symbols) + 1) as outer, ThreadPoolExecutor(2 * len(symbols)) as inner:
+        with ThreadPoolExecutor(MAX_FLIGHT) as outer, ThreadPoolExecutor(MAX_FLIGHT * (len(symbols) + 1)) as inner:
             while True:
                 now = datetime.now(NY)
                 if (now.hour, now.minute) >= (hh, mm):
                     print(f"{a.until} New York reached: stopping.")
                     break
-                started, errors = time.monotonic(), []
-                px_job = outer.submit(last_price, client, future, now) if token_fresh(client) else None
-                try:   # with a token close to its renewal: alone and first, so the renewal happens in this one request
-                    px = last_price(client, future, now) if px_job is None else None
-                except Exception as exc:
-                    px = None
-                    errors.append(f"{future} price: {repr(exc)[:160]}")
-                jobs = {sym: outer.submit(fetch, client, sym, now, state, snap.OUT, inner) for sym, (_, state) in runs.items()}
-                if px_job is not None:
+                # a new request goes out on schedule without waiting for the previous answer, but only once the run is
+                # set up and while the token is far from its renewal; otherwise one at a time
+                ready = all("basis" in st for st in states())
+                room = len(pending) < (MAX_FLIGHT if ready and token_fresh(client) else 1)
+                if room and time.monotonic() >= next_at:
+                    pending.append(outer.submit(grab, client, runs, future, now, snap.OUT, inner, live))
+                    next_at = max(next_at + every, time.monotonic())   # late once does not mean a burst afterwards
+                pause = max(0.0, min(next_at - time.monotonic(), 0.25))
+                if pending:   # until the next request is due; with no room left, until an answer arrives
+                    done = wait(pending, timeout=pause if room else 0.25, return_when=FIRST_COMPLETED)[0]
+                else:
+                    done = set()
+                    time.sleep(pause)
+                results = []
+                for job in done:
+                    pending.remove(job)
                     try:
-                        px = px_job.result()
+                        results.append(job.result())
                     except Exception as exc:
-                        px = None
-                        errors.append(f"{future} price: {repr(exc)[:160]}")
-                chains = {}
-                for sym, job in jobs.items():
-                    try:
-                        chains[sym] = job.result()
-                    except Exception as exc:  # one bad answer must not end the run or the other symbol
-                        errors.append(f"{sym} chain: {repr(exc)[:160]}")
-                fetch_s = time.monotonic() - started
-                lines = []
-                for sym, chain in chains.items():
-                    ses, state = runs[sym]
-                    try:
-                        lines.append(line(cycle(client, ses, sym, now, state, snap.OUT, chain, px, fetch_s)))
-                    except Exception as exc:
-                        errors.append(f"{sym}: {repr(exc)[:160]}")
-                took = time.monotonic() - started
-                if a.verbose or started - printed >= PRINT_EVERY:
-                    print("\n".join(lines) + (f"   cycle {took:.2f}s" if lines else ""), flush=True)
-                    printed = started
-                for e in errors:
-                    print(f"{now:%H:%M:%S}  failed: {e}", flush=True)
-                if any("429" in e for e in errors):   # too many requests: slow down by half and wait before the next try
-                    brake = min(brake * 1.5, 20.0)
-                    every = min(60.0, brake * interval(requests_per_cycle([st for _, st in runs.values()]), a.rate, a.every))
-                    print(f"{now:%H:%M:%S}  Schwab answered 429 (too many requests): now one snapshot every {every:.1f} seconds", flush=True)
-                    time.sleep(10)
-                if took > every:
-                    slow += 1
-                    if slow in (5, 50):
-                        print(f"{now:%H:%M:%S}  cycles take {took:.1f}s, longer than the {every:.1f}s pace: Schwab's answers set the pace", flush=True)
-                if a.open and not opened and lines:
-                    webbrowser.open(page.as_uri())
-                    opened = True
-                every = min(60.0, brake * interval(requests_per_cycle([st for _, st in runs.values()]), a.rate, a.every))
-                for ses, _ in runs.values():
-                    ses.every_s = every
-                time.sleep(max(0.0, every - (time.monotonic() - started)))
+                        print(f"{now:%H:%M:%S}  failed: {repr(exc)[:200]}", flush=True)
+                for r in sorted(results, key=lambda r: r["now"]):
+                    errors, lines = r["errors"], []
+                    if done_at is not None and r["now"] <= done_at:   # an older answer that arrived after a newer one
+                        continue
+                    done_at = r["now"]
+                    p = live.get() if live else None
+                    px = (p, datetime.now(NY)) if p is not None else r["px"]
+                    for sym, chain in r["chains"].items():
+                        ses, state = runs[sym]
+                        ses.every_s = every
+                        try:
+                            lines.append(line(cycle(client, ses, sym, r["now"], state, snap.OUT, chain, px, r["fetch_s"])))
+                        except Exception as exc:
+                            errors.append(f"{sym}: {repr(exc)[:160]}")
+                    n_done += 1 if lines else 0
+                    mono = time.monotonic()
+                    if lines and (a.verbose or mono - printed >= PRINT_EVERY):
+                        print("\n".join(lines) + f"   answer {r['fetch_s']:.2f}s, {n_done} snapshots", flush=True)
+                        printed = mono
+                    for e in errors:
+                        print(f"{r['now']:%H:%M:%S}  failed: {e}", flush=True)
+                    if any("429" in e for e in errors):   # too many requests: slow down by half and pause
+                        brake = min(brake * 1.5, 20.0)
+                        print(f"{r['now']:%H:%M:%S}  Schwab answered 429 (too many requests): slowing down to one snapshot "
+                              f"every {pace(brake, bool(p)):.1f} seconds", flush=True)
+                        next_at = time.monotonic() + 10
+                    if a.open and not opened and lines:
+                        webbrowser.open(page.as_uri())
+                        opened = True
+                on = bool(live and live.get() is not None)
+                if live is not None and on != streaming:
+                    why = f" ({live.error})" if not on and live.error else ""
+                    print(f"{datetime.now(NY):%H:%M:%S}  {future} price: " + ("from the stream" if on else f"one request per snapshot, stream not connected{why}"), flush=True)
+                    streaming = on
+                every = pace(brake, on)
     except KeyboardInterrupt:
         print("\nStopped.")
+    finally:
+        stop.set()
 
 
 if __name__ == "__main__":

@@ -96,6 +96,7 @@ browser:
 cd ~/trading-backtests && source .venv/bin/activate
 python bots/gex_live.py --open                   # ES from SPX, about every 1.1 seconds until 16:15 New York; Ctrl-C stops
 python bots/gex_live.py --symbols '$SPX' SPY     # a second map from SPY next to it: about every 1.6 seconds
+python bots/gex_live.py --open --stream          # /ES price from the quote stream: about every 0.55 seconds
 python bots/gex_live.py --every 10               # slower
 python bots/gex_live.py --verbose                # print every cycle (default: a status line every 15 seconds)
 ```
@@ -118,6 +119,14 @@ Things to know:
   both sides, the loop asks for calls and puts separately from then on (1.6 seconds) and says so. If Schwab answers
   429 (too many requests), the loop slows down by half and says so. Do not run another script against the same
   Schwab app at the same time: the limit is shared.
+- Requests overlap. A new request goes out on schedule while earlier answers are still on their way (at most four),
+  so one slow answer does not delay the next snapshot. An answer that arrives after a newer one is dropped.
+- `--stream` takes the `/ES` price from Schwab's quote stream instead of asking for it at every snapshot. The price
+  is then the last trade at the moment the chain arrives, and a snapshot costs one request instead of two, so the
+  same budget gives one every 0.55 seconds. The terminal says when the price comes from the stream and when the loop
+  has gone back to asking (stream not connected). Schwab may allow only one stream per login: do not use `--stream`
+  while another program streams with the same Schwab login. The cloud `/NQ` paper bot does; whether a second stream
+  disturbs it has not been tested.
 - Schwab's data does move that fast: on 2026-11-10 before the open, at one snapshot every 3 seconds, option volume
   changed in 99% of snapshots and the `/ES` price (the newest 1-minute candle including the minute still forming) in
   about 90%.

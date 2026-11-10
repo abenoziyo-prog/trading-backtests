@@ -148,8 +148,10 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
         return {**out, "contracts": 0}
     num = [k for k in COLS if k not in ("put_call", "expiry")]
     c = c.astype({k: float for k in num if k in c})
-    c = c[(c.expiry == exp) & (c.strike > 0) & (c.open_interest > 0)].reset_index(drop=True)
-    out.update(expiry=exp, dte=(pd.Timestamp(exp).date() - asof.date()).days, contracts=len(c))
+    c = c[(c.expiry == exp) & (c.strike > 0)]
+    listed = len(c)        # contracts Schwab lists for the expiry; early in the morning their open interest is still 0
+    c = c[c.open_interest > 0].reset_index(drop=True)
+    out.update(expiry=exp, dte=(pd.Timestamp(exp).date() - asof.date()).days, listed=listed, contracts=len(c))
     if c.empty:
         return out
     for side, name in (("CALL", "call"), ("PUT", "put")):

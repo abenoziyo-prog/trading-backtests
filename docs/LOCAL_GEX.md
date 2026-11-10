@@ -62,6 +62,9 @@ The free S&P history used for the day-size call needs no key:
 python bots/fetch_spx_gex.py
 ```
 
+If the run says every open interest is 0, it was too early: Schwab had not loaded the overnight figures yet (seen at
+06:22 New York time on 2026-11-10). Run it again closer to the open.
+
 ## Every 7 days
 
 Schwab's login expires after 7 days. When a run fails with an authorization error, repeat step 4.

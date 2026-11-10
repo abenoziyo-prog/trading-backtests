@@ -136,6 +136,9 @@ def load_env(root: Path = ROOT, env=os.environ) -> None:
 
 def describe(z: dict) -> str:
     """One 0DTE row as a few readable lines for the terminal."""
+    if not z.get("error") and not z.get("contracts") and z.get("listed"):
+        return (f"{z['symbol']}: Schwab lists {z['listed']} contracts for {z['expiry']} but every open interest is 0. "
+                "The overnight figures are not loaded yet: run again closer to 09:20 New York time.")
     if z.get("error") or not z.get("contracts"):
         return f"{z['symbol']}: no 0DTE data ({z.get('error') or 'no live expiry with open interest'})"
 

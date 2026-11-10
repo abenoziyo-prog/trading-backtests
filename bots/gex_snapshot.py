@@ -21,6 +21,10 @@ Local use (docs/LOCAL_GEX.md): the Schwab keys are read from the repository's .e
 state/nqbot/schwab_token.json, and --zero-dte-only skips the 30-day chains for a run of a few seconds:
 
     python bots/gex_snapshot.py --zero-dte-only
+
+Futures levels: each 0DTE row also carries the flip and the walls moved onto the future the index is traded through
+($SPX -> /ES, $NDX -> /NQ): level + basis, from the future's 1-minute price history (quant.live.gex.futures_levels).
+Price history is the only call added; if it fails the row is saved without the futures columns.
 """
 from __future__ import annotations
 
@@ -37,13 +41,14 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant.live.gex import contracts, drop_am_settled, spot_of, summary, zero_dte  # noqa: E402
-from quant.live.schwab_feed import ReadOnlyClient, make_client  # noqa: E402
+from quant.live.gex import FUTURE, contracts, drop_am_settled, futures_levels, spot_of, summary, zero_dte  # noqa: E402
+from quant.live.schwab_feed import ReadOnlyClient, history_bars, make_client  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "gex"
 SYMBOLS = ["QQQ", "$NDX", "SPY", "$SPX"]  # /NQ futures options: the chains endpoint answers 400 (checked 2026-10-27)
 ZERO_DTE = ["$SPX", "$NDX"]  # the nearest-expiry summary (gex_0dte.csv); both have an expiry every trading day
+RETRY_S = 300  # --wait: seconds between tries while the API reports no open interest
 ZERO_DTE_LOOKAHEAD = 6  # days searched for the nearest expiry (covers a long weekend)
 CHUNK_DAYS = 3  # expiry days per request: keeps each response small (the container has 256 MB)
 
@@ -118,6 +123,18 @@ def snapshot_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead:
     raise ValueError(f"no expiry found for {symbol} within {lookahead} days (last error: {last!r})")
 
 
+def add_futures(client: ReadOnlyClient, z: dict, now: datetime) -> dict:
+    """The row with its levels on the future (see futures_levels). Never raises: the reason goes to `fut_error`."""
+    fut = FUTURE.get(z.get("symbol"))
+    if not fut or z.get("error") or not z.get("contracts"):
+        return z
+    try:
+        lv = futures_levels(z, history_bars(client, fut, now - timedelta(days=5), now), now, fut)
+        return {**z, **(lv or dict(fut_symbol=fut, fut_error="no usable bar for the basis"))}
+    except Exception as exc:
+        return {**z, "fut_symbol": fut, "fut_error": repr(exc)[:200]}
+
+
 def append_csv(p: Path, log: pd.DataFrame) -> None:
     old = pd.read_csv(p) if p.exists() else None
     pd.concat([old, log], ignore_index=True).to_csv(p, index=False) if old is not None else log.to_csv(p, index=False)
@@ -134,8 +151,17 @@ def load_env(root: Path = ROOT, env=os.environ) -> None:
     env.setdefault("SCHWAB_TOKEN_PATH", str(root / "state" / "nqbot" / "schwab_token.json"))
 
 
+def oi_missing(zrows: list[dict]) -> bool:
+    """True when Schwab listed contracts for a symbol but reported open interest 0 on every one of them."""
+    return any(not z.get("error") and z.get("listed") and not z.get("contracts") for z in zrows)
+
+
 def describe(z: dict) -> str:
     """One 0DTE row as a few readable lines for the terminal."""
+    if not z.get("error") and not z.get("contracts") and z.get("listed"):
+        return (f"{z['symbol']}: Schwab lists {z['listed']} contracts for {z['expiry']} but reports open interest 0 on all of "
+                "them. On 2026-11-10 that was the case until about 06:30 New York time and the same request worked at "
+                "06:34. Run again in a few minutes, or use --wait to keep trying.")
     if z.get("error") or not z.get("contracts"):
         return f"{z['symbol']}: no 0DTE data ({z.get('error') or 'no live expiry with open interest'})"
 
@@ -148,6 +174,16 @@ def describe(z: dict) -> str:
              f"  largest call OI   {top('call')}",
              f"  largest put OI    {top('put')}",
              f"  total OI          calls {z.get('call_oi', 0):,}   puts {z.get('put_oi', 0):,}"]
+    if z.get("fut_basis") is not None:
+        when = "live, index and future now" if z["fut_basis_kind"] == "live" else f"at the cash close, {z['fut_basis_at'][:10]} 16:00"
+        lv = "   ".join(f"{n} {z[k]:,.2f}" for n, k in (("flip", "fut_gamma_flip"), ("call wall", "fut_call_wall"),
+                                                         ("put wall", "fut_put_wall")) if z.get(k) is not None)
+        lines += [f"  on {z['fut_symbol']:<14} last {z['fut_last']:,.2f}   basis {z['fut_basis']:+,.2f} ({when})", f"    levels          {lv}"]
+        if z.get("fut_gamma_flip") is not None:
+            d = z["fut_last"] - z["fut_gamma_flip"]
+            lines.append(f"    last vs flip    {d:+,.2f} ({'above' if d >= 0 else 'below'})")
+    elif z.get("fut_error"):
+        lines.append(f"  on {z['fut_symbol']:<14} not available ({z['fut_error']})")
     return "\n".join(lines)
 
 
@@ -158,6 +194,8 @@ def main() -> None:
     ap.add_argument("--days", type=int, default=30, help="expirations up to this many days ahead")
     ap.add_argument("--strikes", type=int, default=120, help="strikes around the money, both sides together (~60 each side)")
     ap.add_argument("--zero-dte", nargs="*", default=ZERO_DTE, help="symbols for the nearest-expiry summary (none: skip)")
+    ap.add_argument("--wait", type=float, default=0, metavar="MINUTES",
+                    help="0DTE rows: while Schwab's API reports open interest 0, try again every 5 minutes for this long")
     ap.add_argument("--zero-dte-only", action="store_true", help="skip the 30-day chains; only the 0DTE rows")
     a = ap.parse_args()
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_TOKEN_PATH") if not os.environ.get(k)]
@@ -166,7 +204,7 @@ def main() -> None:
     if not Path(os.environ["SCHWAB_TOKEN_PATH"]).exists():
         sys.exit(f"no Schwab token at {os.environ['SCHWAB_TOKEN_PATH']}: run python bots/schwab_login.py first")
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
-                         extra=ReadOnlyClient.OPTION_CHAIN)
+                         extra=ReadOnlyClient.MARKET_DATA)
     now = datetime.now(NY)
     rows = []
     for sym in ([] if a.zero_dte_only else a.symbols):
@@ -180,13 +218,21 @@ def main() -> None:
     if rows:
         append_csv(OUT / "gex_daily.csv", log)
         print(log.to_string(index=False))
-    zrows = []
-    for sym in a.zero_dte:
-        try:
-            zrows.append(snapshot_0dte(client, sym, now))
-        except Exception as exc:  # the 0DTE rows are an extra: a failure here never fails the snapshot job
-            zrows.append(dict(asof=now.isoformat(timespec="minutes"), symbol=sym, error=repr(exc)[:300]))
-        time.sleep(0.5)
+    deadline = time.monotonic() + 60 * a.wait
+    while True:
+        zrows = []
+        for sym in a.zero_dte:
+            try:
+                zrows.append(add_futures(client, snapshot_0dte(client, sym, now), now))
+            except Exception as exc:  # the 0DTE rows are an extra: a failure here never fails the snapshot job
+                zrows.append(dict(asof=now.isoformat(timespec="minutes"), symbol=sym, error=repr(exc)[:300]))
+            time.sleep(0.5)
+        if not oi_missing(zrows) or time.monotonic() >= deadline:
+            break
+        print(f"{datetime.now(NY):%H:%M} New York: Schwab's API still reports open interest 0; trying again in "
+              f"{RETRY_S // 60} minutes (Ctrl-C to stop)", flush=True)
+        time.sleep(RETRY_S)
+        now = datetime.now(NY)
     if zrows:
         z = pd.DataFrame(zrows)
         append_csv(OUT / "gex_0dte.csv", z)

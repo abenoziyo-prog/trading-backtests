@@ -148,8 +148,10 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
         return {**out, "contracts": 0}
     num = [k for k in COLS if k not in ("put_call", "expiry")]
     c = c.astype({k: float for k in num if k in c})
-    c = c[(c.expiry == exp) & (c.strike > 0) & (c.open_interest > 0)].reset_index(drop=True)
-    out.update(expiry=exp, dte=(pd.Timestamp(exp).date() - asof.date()).days, contracts=len(c))
+    c = c[(c.expiry == exp) & (c.strike > 0)]
+    listed = len(c)        # contracts Schwab lists for the expiry; early in the morning their open interest is still 0
+    c = c[c.open_interest > 0].reset_index(drop=True)
+    out.update(expiry=exp, dte=(pd.Timestamp(exp).date() - asof.date()).days, listed=listed, contracts=len(c))
     if c.empty:
         return out
     for side, name in (("CALL", "call"), ("PUT", "put")):
@@ -189,3 +191,49 @@ def spot_of(chain: dict) -> float | None:
         if v is not None and float(v) > 0:
             return float(v)
     return None
+
+
+FUTURE = {"$SPX": "/ES", "$NDX": "/NQ"}  # the future each index's levels are read on
+
+
+def cash_open(now: datetime) -> bool:
+    """Regular index hours, 09:30-16:00 New York on a weekday (holidays are not known here)."""
+    return now.weekday() < 5 and time(9, 30) <= now.time() < time(16)
+
+
+def futures_levels(z: dict, bars: list, now: datetime, future: str) -> dict:
+    """Index levels of a zero_dte() row moved onto the future: level + basis, basis = future - index at one moment.
+    `bars` are the future's 1-minute bars, oldest first (anything with .t = bar start and .close).
+      cash open    basis = latest future price - the chain's index price (both live); a bar older than 5 minutes is
+                   refused
+      cash closed  the chain's index price is the last cash close, so the basis is taken at that close: the future's
+                   15:59 bar (it ends at 16:00) of the latest weekday that has one, minus the index price
+    Returns {} when the bars do not allow it. The basis moves a point or two during the day and steps at each
+    quarterly roll, so the moved levels are zones, not exact prices."""
+    spot = z.get("spot")
+    if not bars or not spot:
+        return {}
+    last = bars[-1]
+    if cash_open(now):
+        if (now - last.t).total_seconds() > 360:
+            return {}
+        ref, kind = last, "live"
+    else:
+        day = now.date() if now.weekday() < 5 and now.time() >= time(16) else now.date() - timedelta(days=1)
+        at = {b.t.replace(tzinfo=None): b for b in bars if b.t.time() == time(15, 59)}
+        ref = None
+        for _ in range(6):
+            ref = at.get(datetime.combine(day, time(15, 59))) if day.weekday() < 5 else None
+            if ref:
+                break
+            day -= timedelta(days=1)
+        if ref is None:
+            return {}
+        kind = "close"
+    basis = ref.close - spot
+    out = dict(fut_symbol=future, fut_last=round(last.close, 2), fut_last_at=last.t.isoformat(timespec="minutes"),
+               fut_basis=round(basis, 2), fut_basis_kind=kind, fut_basis_at=ref.t.isoformat(timespec="minutes"))
+    for k in ("gamma_flip", "call_wall", "put_wall"):
+        if z.get(k) is not None and not pd.isna(z.get(k)):
+            out["fut_" + k] = round(float(z[k]) + basis, 2)
+    return out

@@ -140,9 +140,11 @@ Things to know:
   about 90%.
 - SPY has no basis. Its strikes are moved onto `/ES` by the price ratio `/ES` / SPY (about 10), taken once when the
   run starts from SPY's newest 1-minute bar and the future's bar of the same minute.
-- The call wall is the strike with the largest call gamma, the put wall the strike with the largest put gamma. In
-  the last hours of an expiry almost all gamma sits at the strike nearest the price, so both walls can then show the
-  same strike.
+- The call wall is the strike with the largest call open interest above the price, the put wall the strike with the
+  largest put open interest below it, both looked for within 1% of the price. They come from open interest, not from
+  gamma: late in an expiry almost all gamma sits on the strike at the price, so walls ranked by gamma follow the
+  price and end on the same strike. Open interest is the previous close's figure, so positions opened today are not
+  in the walls.
 - SPY gamma covers the SPY chain alone. It is a separate position from the SPX chain, with its own walls and flip:
   read each map on its own, and compare where the levels of the two sources agree.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the

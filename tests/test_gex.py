@@ -331,7 +331,8 @@ def test_strike_table_matches_the_summary_and_keeps_volume_without_open_interest
     now = datetime(2026, 10, 27, 9, 20, tzinfo=NY)
     t, z = strike_table(c, 7722.0, now), zero_dte(c, 7722.0, now, "$SPX")
     assert round(t.call_gex.sum()) == z["call_gex"] and round(t.put_gex.sum()) == z["put_gex"]
-    assert t.call_gex.idxmax() == z["call_wall"] and t.put_gex.idxmin() == z["put_wall"]
+    up, down = t.call_oi[(t.index > 7722.0) & (t.index <= 7722.0 * 1.01)], t.put_oi[(t.index < 7722.0) & (t.index >= 7722.0 * 0.99)]
+    assert up.idxmax() == z["call_wall"] and down.idxmax() == z["put_wall"]
     assert t.at[7850.0, "call_volume"] == 900 and t.at[7850.0, "call_gex"] == 0 and (t.put_gex <= 0).all()
     assert t.call_oi.sum() == z["call_oi"] and list(t.index) == sorted(t.index)
 
@@ -562,3 +563,17 @@ def test_a_slowdown_after_429_is_taken_back_step_by_step():
     assert live.ease(1.5 ** 4, live.RECOVER_S - 1) == 1.5 ** 4          # not yet
     assert live.ease(1.5 ** 4, live.RECOVER_S) == 1.5 ** 3              # one step back
     assert live.ease(1.2, live.RECOVER_S) == 1.0 and live.ease(1.0, 9999) == 1.0
+
+
+def test_walls_come_from_open_interest_near_the_price():
+    import pandas as pd
+    from quant.live.gex import walls
+    call_oi = pd.Series({7475.0: 1416, 7490.0: 659, 7500.0: 1525, 7505.0: 390, 7510.0: 506, 7550.0: 3119, 7690.0: 8085})
+    put_oi = pd.Series({7450.0: 3501, 7475.0: 2093, 7490.0: 1389, 7500.0: 3725, 7510.0: 1111, 6900.0: 7034})
+    assert walls(call_oi, put_oi, 7500.72) == dict(call_wall=7550.0, put_wall=7500.0)      # 7690 and 6900 are outside 1%
+    assert walls(call_oi, put_oi, 7499.0)["put_wall"] == 7450.0                           # below the price only
+    assert walls(call_oi, put_oi, 7499.0, band=1.0) == dict(call_wall=7690.0, put_wall=6900.0)
+    tie = walls(pd.Series({7510.0: 5, 7520.0: 5}), pd.Series({7480.0: 5, 7490.0: 5}), 7500.0)
+    assert tie == dict(call_wall=7510.0, put_wall=7490.0)                                 # the nearer strike on a tie
+    assert walls(call_oi, put_oi, 7800.0)["call_wall"] is None
+    assert walls(pd.Series(dtype=float), pd.Series(dtype=float), 7500.0) == dict(call_wall=None, put_wall=None)

@@ -148,7 +148,8 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
     """Dealer gamma and open interest of the nearest live expiry only (same-day before the close).
       net_gex / regime      as in summary(), on this expiry alone: "positive" or "negative"
       gamma_flip            where this expiry's net GEX crosses zero (nearest crossing to spot), if any
-      call_wall / put_wall  strike with the largest call GEX / the largest (negative) put GEX
+      call_wall / put_wall  largest call open interest above the price / largest put open interest below it, within
+                            WALL_BAND of the price (see walls)
       max_call_oi_strike, max_put_oi_strike, max_call_oi, max_put_oi   the largest open-interest strike per side
       top_call_oi / top_put_oi   the `top` largest strikes per side as "strike:open interest" joined by "|"
     Open interest is the previous close's figure: positions opened today are not in it."""
@@ -190,9 +191,25 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
                regime="positive" if net > 0 else "negative",
                gamma_flip=round(float(flip), 2) if np.isfinite(flip) else None,
                spot_vs_flip_pct=round(100 * (spot / flip - 1), 2) if np.isfinite(flip) else None,
-               call_wall=float(calls.idxmax()) if len(calls) and calls.max() > 0 else None,
-               put_wall=float(puts.idxmin()) if len(puts) and puts.min() < 0 else None)
+               **walls(c[c.put_call == "CALL"].groupby("strike").open_interest.sum(),
+                       c[c.put_call == "PUT"].groupby("strike").open_interest.sum(), spot))
     return out
+
+
+WALL_BAND = 0.01     # walls are looked for within this fraction of the price, on each side
+
+
+def walls(call_oi: pd.Series, put_oi: pd.Series, spot: float, band: float = WALL_BAND) -> dict:
+    """call_wall: the strike with the largest call open interest above the price, at most `band` away. put_wall: the
+    strike with the largest put open interest below the price, at most `band` away (the nearer strike on a tie).
+    The walls come from open interest, not from gamma. Gamma is highest at the money and, in the last hours of an
+    expiry, almost all of it sits on the strike at the price, so a wall ranked by gamma follows the price around and
+    both sides end on the same strike. Open interest says where the positions are and does not change during the day.
+    The band keeps the walls to positions the price can reach today: the largest positions of a chain are often far
+    out of the money."""
+    up = call_oi[(call_oi.index > spot) & (call_oi.index <= spot * (1 + band)) & (call_oi > 0)].sort_index()
+    down = put_oi[(put_oi.index < spot) & (put_oi.index >= spot * (1 - band)) & (put_oi > 0)].sort_index(ascending=False)
+    return dict(call_wall=float(up.idxmax()) if len(up) else None, put_wall=float(down.idxmax()) if len(down) else None)
 
 
 def spot_of(chain: dict) -> float | None:

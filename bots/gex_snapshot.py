@@ -95,6 +95,16 @@ def snapshot_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead:
     return zero_dte(c, spot, now, symbol)
 
 
+def fetch_side(client: ReadOnlyClient, symbol: str, day, contract_type) -> tuple[pd.DataFrame, float | None]:
+    """One request: the calls or the puts of `symbol` expiring on `day`, every strike. Returns the contract rows
+    (AM-settled series removed) and the underlying price of the response."""
+    r = client.get_option_chain(symbol, contract_type=contract_type, include_underlying_quote=True, from_date=day, to_date=day)
+    r.raise_for_status()
+    chain = r.json()
+    del r
+    return contracts(drop_am_settled(chain)), spot_of(chain)
+
+
 def fetch_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead: int = ZERO_DTE_LOOKAHEAD,
                out: Path | None = None, pause: float = 0.3) -> tuple[pd.DataFrame, float]:
     """The nearest live expiry of `symbol` with every strike Schwab lists (no strike_count), calls and puts in separate
@@ -108,16 +118,10 @@ def fetch_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead: in
         parts, spot = [], None
         try:
             for ct in (CALL, PUT):
-                r = client.get_option_chain(symbol, contract_type=ct, include_underlying_quote=True, from_date=day,
-                                            to_date=day)
-                r.raise_for_status()
-                chain = r.json()
-                del r
-                spot = spot or spot_of(chain)
-                part = contracts(drop_am_settled(chain))   # a day without an expiry answers with empty maps (or FAILED)
+                part, px = fetch_side(client, symbol, day, ct)   # a day without an expiry answers with empty maps (or FAILED)
+                spot = spot or px
                 if len(part):
                     parts.append(part)
-                del chain
                 time.sleep(pause)
         except Exception as exc:  # a day Schwab refuses is skipped; the error is reported if no day works
             last = exc

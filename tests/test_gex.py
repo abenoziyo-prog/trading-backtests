@@ -234,3 +234,24 @@ def test_zero_dte_snapshot_asks_for_every_strike_and_skips_days_without_expiry(t
     seen.clear()
     z = snap.snapshot_0dte(client, "$SPX", datetime(2026, 10, 23, 16, 20, tzinfo=NY))
     assert z["expiry"] == "2026-10-27" and z["dte"] == 4 and seen[0][1] == date(2026, 10, 24)
+
+
+def test_local_env_defaults_and_readable_0dte_lines(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("snap1", Path(__file__).resolve().parents[1] / "bots/gex_snapshot.py")
+    snap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(snap)
+    (tmp_path / ".env").write_text("SCHWAB_API_KEY=from_file\nSCHWAB_APP_SECRET=s\n")
+    env = {}
+    snap.load_env(tmp_path, env)
+    assert env["SCHWAB_TOKEN_PATH"] == str(tmp_path / "state" / "nqbot" / "schwab_token.json")
+    env = {"SCHWAB_TOKEN_PATH": "/x/token.json"}
+    snap.load_env(tmp_path, env)
+    assert env["SCHWAB_TOKEN_PATH"] == "/x/token.json"          # a value that is already set wins
+    z = dict(asof="2026-10-27T09:20-04:00", symbol="$SPX", spot=7722.6, expiry="2026-10-27", dte=0, contracts=6,
+             regime="negative", net_gex=-1.5e9, gamma_flip=7730.0, call_wall=7750.0, put_wall=7650.0,
+             top_call_oi="7750:4000|7800:2500", top_put_oi="7650:6000", call_oi=7400, put_oi=10200)
+    text = snap.describe(z)
+    assert "NEGATIVE" in text and "-1.50bn" in text and "7750 (4,000), 7800 (2,500)" in text and "7650 (6,000)" in text
+    assert "no 0DTE data" in snap.describe(dict(symbol="$NDX", error="boom"))

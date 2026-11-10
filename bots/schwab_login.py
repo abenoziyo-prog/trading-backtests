@@ -21,6 +21,13 @@ from quant.live.schwab_feed import ReadOnlyClient, refresh_token_hours_left  # n
 
 def main() -> None:
     env = os.environ
+    try:  # local use: keys from the repository's .env, token next to the bot's other state (docs/LOCAL_GEX.md)
+        from dotenv import load_dotenv
+        load_dotenv(ROOT / ".env")
+    except ImportError:
+        pass
+    env.setdefault("SCHWAB_CALLBACK_URL", "https://127.0.0.1:8182")
+    env.setdefault("SCHWAB_TOKEN_PATH", str(ROOT / "state" / "nqbot" / "schwab_token.json"))
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_CALLBACK_URL", "SCHWAB_TOKEN_PATH") if not env.get(k)]
     if missing:
         sys.exit(f"missing environment variables: {', '.join(missing)} (see deploy/nq_paper_bot.env.example)")

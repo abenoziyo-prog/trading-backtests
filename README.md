@@ -14,6 +14,8 @@ Research and paper trading for Nasdaq-100 futures (/NQ), US session and overnigh
 - **Options and volatility research:** `docs/GEX_FRAMEWORK.md` (pre-registered hypotheses), `scripts/vix_strategy_study.py`,
   `scripts/vix_rule_of_16.py`.
 
+- **GEX and 0DTE on your own computer:** `python bots/gex_snapshot.py --zero-dte-only` (setup in `docs/LOCAL_GEX.md`).
+
 ## Setup
 
 ```bash

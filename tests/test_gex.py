@@ -344,6 +344,7 @@ def test_live_map_session_reports_new_volume_and_level_moves(tmp_path):
     t0 = datetime(2026, 10, 27, 9, 31, tzinfo=NY)
     ses, basis = Session("/ES", 60), 40.0
     d = ses.add(t0, zero_dte(c, 7722.0, t0, "$SPX"), strike_table(c, 7722.0, t0), 7762.0, basis, "test", 7722.0, 1.5)
+    assert d["M"]["prev"] is None
     assert d["M"]["snaps"] == 1 and d["movers"] == [] and d["notes"] == [] and all(r["dc1"] == 0 for r in d["R"])
     c2 = c.copy()
     k = float(c2.strike.iloc[0])
@@ -355,6 +356,7 @@ def test_live_map_session_reports_new_volume_and_level_moves(tmp_path):
     assert (row["dc1"], row["dc0"], row["dc5"], row["dp1"]) == (250, 250, 0, 0)
     assert any("ES moved +10.00 points since 09:31" in s for s in d["notes"]) and len(d["H"]) == 2
     assert d["M"]["futLast"] == 7772.0 and d["M"]["spot"] == 7732.0 and d["H"][1]["fut"] == 7772.0
+    assert d["M"]["prev"]["futLast"] == 7762.0 and d["M"]["prev"]["callVol"] == d["M"]["callVol"] - 250
     html = render(d)
     assert "/*DATA*/null" not in html and "__REFRESH__" not in html and '"futLast":7772.0' in html
     write(tmp_path / "live" / "es_map.html", d)

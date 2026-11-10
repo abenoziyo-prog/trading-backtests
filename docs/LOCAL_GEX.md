@@ -140,11 +140,11 @@ Things to know:
   about 90%.
 - SPY has no basis. Its strikes are moved onto `/ES` by the price ratio `/ES` / SPY (about 10), taken once when the
   run starts from SPY's newest 1-minute bar and the future's bar of the same minute.
-- The call wall is the strike with the largest call open interest above the price, the put wall the strike with the
-  largest put open interest below it, both looked for within 1% of the price. They come from open interest, not from
-  gamma: late in an expiry almost all gamma sits on the strike at the price, so walls ranked by gamma follow the
-  price and end on the same strike. Open interest is the previous close's figure, so positions opened today are not
-  in the walls.
+- The call wall is the strike with the most call contracts above the price, the put wall the strike with the most
+  put contracts below it, both looked for within 1% of the price. Contracts are open interest plus today's volume.
+  Open interest alone is the previous close's figure and stands still all day; today's volume is what lets a wall
+  move to another strike during the session. The tile shows the contracts at the wall and their change since the
+  previous snapshot. Gamma is not used for the ranking: late in an expiry it sits on the strike at the price.
 - On the wall tiles the brackets show how far the wall is from the future's last price (a wall is a fixed strike, so
   its change between two snapshots is almost always 0). On the other tiles they show the change since the previous
   snapshot.

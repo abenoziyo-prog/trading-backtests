@@ -1,5 +1,5 @@
 """GEX snapshot: chain parsing, the gamma math, the read-only allowance and the runner's schedule."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -319,3 +319,89 @@ def test_snapshot_adds_futures_lines_and_survives_a_failed_price_history():
     bad = snap.add_futures(ReadOnlyClient(Fake(), extra=ReadOnlyClient.OPTION_CHAIN), z, now)
     assert bad["net_gex"] == 2.4e9 and "PermissionError" in bad["fut_error"] and "not available" in snap.describe(bad)
     assert snap.add_futures(None, dict(symbol="QQQ", contracts=5), now) == dict(symbol="QQQ", contracts=5)
+
+
+def test_strike_table_matches_the_summary_and_keeps_volume_without_open_interest():
+    import pandas as pd
+    from quant.live.gex import strike_table, zero_dte
+    extra = {"7850.0": dict(putCall="CALL", strikePrice=7850.0, openInterest=0, totalVolume=900, volatility=20.0, gamma=0.001,
+                            delta=0.1, bid=1, ask=1.2, mark=1.1, multiplier=100, daysToExpiration=0,
+                            expirationDate="2026-10-27T20:00:00.000+00:00")}
+    c = pd.concat([contracts(zero_chain("CALL", extra=extra)), contracts(zero_chain("PUT"))], ignore_index=True)
+    now = datetime(2026, 10, 27, 9, 20, tzinfo=NY)
+    t, z = strike_table(c, 7722.0, now), zero_dte(c, 7722.0, now, "$SPX")
+    assert round(t.call_gex.sum()) == z["call_gex"] and round(t.put_gex.sum()) == z["put_gex"]
+    assert t.call_gex.idxmax() == z["call_wall"] and t.put_gex.idxmin() == z["put_wall"]
+    assert t.at[7850.0, "call_volume"] == 900 and t.at[7850.0, "call_gex"] == 0 and (t.put_gex <= 0).all()
+    assert t.call_oi.sum() == z["call_oi"] and list(t.index) == sorted(t.index)
+
+
+def test_live_map_session_reports_new_volume_and_level_moves(tmp_path):
+    from quant.live.gex import strike_table, zero_dte
+    import pandas as pd
+    from quant.live.gex_map import Session, render, write
+    c = pd.concat([contracts(zero_chain("CALL")), contracts(zero_chain("PUT"))], ignore_index=True)
+    t0 = datetime(2026, 10, 27, 9, 31, tzinfo=NY)
+    ses, basis = Session("/ES", 60), 40.0
+    d = ses.add(t0, zero_dte(c, 7722.0, t0, "$SPX"), strike_table(c, 7722.0, t0), 7762.0, basis, "test", 7722.0, 1.5)
+    assert d["M"]["snaps"] == 1 and d["movers"] == [] and d["notes"] == [] and all(r["dc1"] == 0 for r in d["R"])
+    c2 = c.copy()
+    k = float(c2.strike.iloc[0])
+    c2.loc[(c2.strike == k) & (c2.put_call == "CALL"), "volume"] += 250      # 250 calls trade at one strike
+    t1 = datetime(2026, 10, 27, 9, 32, tzinfo=NY)
+    d = ses.add(t1, zero_dte(c2, 7732.0, t1, "$SPX"), strike_table(c2, 7732.0, t1), 7772.0, basis, "test", 7722.0, 1.5)
+    assert d["movers"][0]["k"] == k and d["movers"][0]["dc"] == 250 and d["movers"][0]["dp"] == 0
+    row = next(r for r in d["R"] if r["k"] == k)
+    assert (row["dc1"], row["dc0"], row["dc5"], row["dp1"]) == (250, 250, 0, 0)
+    assert any("ES moved +10.00 points since 09:31" in s for s in d["notes"]) and len(d["H"]) == 2
+    assert d["M"]["futLast"] == 7772.0 and d["M"]["spot"] == 7732.0 and d["H"][1]["fut"] == 7772.0
+    html = render(d)
+    assert "/*DATA*/null" not in html and "__REFRESH__" not in html and '"futLast":7772.0' in html
+    write(tmp_path / "live" / "es_map.html", d)
+    assert (tmp_path / "live" / "es_map.html").read_text(encoding="utf-8") == html and not (tmp_path / "live" / "es_map.tmp").exists()
+
+
+def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
+    import importlib.util
+    import json
+    from pathlib import Path
+    import pandas as pd
+    spec = importlib.util.spec_from_file_location("gex_live", Path(__file__).resolve().parents[1] / "bots/gex_live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    live.snap.time.sleep = lambda s: None
+    calls = []
+    ms = lambda *a: int(datetime(*a, tzinfo=NY).timestamp() * 1000)  # noqa: E731
+
+    class Resp:
+        def __init__(self, d):
+            self.d = d
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return json.loads(json.dumps(self.d))
+
+    class Fake:
+        def get_option_chain(self, symbol, contract_type=None, **k):
+            calls.append("chain")
+            return Resp(zero_chain(contract_type.value))
+
+        def get_price_history_every_minute(self, symbol, start_datetime=None, **k):
+            calls.append("history")
+            return Resp(dict(candles=[dict(datetime=ms(2026, 10, 26, 15, 59), open=1, high=1, low=1, close=7760.0),
+                                      dict(datetime=ms(2026, 10, 27, 9, 19), open=1, high=1, low=1, close=7770.0)]))
+
+    client = ReadOnlyClient(Fake(), extra=ReadOnlyClient.MARKET_DATA)
+    ses, state = live.Session("/ES", 60), {}
+    now = datetime(2026, 10, 27, 9, 20, tzinfo=NY)
+    d = live.cycle(client, ses, "$SPX", now, state, tmp_path)
+    assert state["basis"] == 38.0 and "cash close, 2026-10-26" in state["note"]     # 7760 - the chain's 7722 close
+    assert d["M"]["futLast"] == 7770.0 and d["M"]["spot"] == 7732.0 and calls == ["chain", "chain", "history", "history"]
+    calls.clear()
+    live.cycle(client, ses, "$SPX", now + timedelta(minutes=1), state, tmp_path)
+    assert calls == ["chain", "chain", "history"]                                   # the basis is fetched once
+    assert (tmp_path / "live" / "es_map.html").exists() and len(pd.read_csv(tmp_path / "gex_live.csv")) == 2
+    assert len(list((tmp_path / "SPX_IDX_0DTE" / "live" / "2026-10-27").glob("*.parquet"))) == 2
+    assert "ES 7,770.00" in live.line(d) or "/ES 7,770.00" in live.line(d)

@@ -1,0 +1,124 @@
+"""Live ES dealer map: turns successive 0DTE chain snapshots into one self-refreshing HTML page.
+
+Session keeps the snapshots of one run and, for each new one, builds the page data: the levels moved onto the future
+(level + basis), gamma / vanna / charm per strike, and what changed since the previous snapshot, about five minutes
+ago and the first snapshot. Open interest does not change during the day, so "new positioning" is read from volume:
+contracts traded per strike between two snapshots. Volume does not say who bought and who sold.
+"""
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+TEMPLATE = Path(__file__).with_name("gex_map_template.html")
+HALF_WIDTH = 200.0   # index points each side of spot shown on the strike ladders
+TOP = 8              # strikes listed in the "what changed" table
+
+
+def _f(x, nd=2):
+    return None if x is None or pd.isna(x) else round(float(x), nd)
+
+
+class Session:
+    def __init__(self, future: str = "/ES", every_s: int = 60, refresh_s: int = 20):
+        self.future, self.every_s, self.refresh_s = future, every_s, refresh_s
+        self.snaps: list[dict] = []   # dict(t, z, vol (DataFrame call_volume/put_volume), fut, basis)
+
+    def _back(self, minutes: float) -> dict | None:
+        """The snapshot closest to `minutes` before the latest one (None when the run is younger than that)."""
+        now = self.snaps[-1]["t"]
+        old = [s for s in self.snaps[:-1] if (now - s["t"]).total_seconds() >= minutes * 60 - 20]
+        return old[-1] if old else None
+
+    def add(self, now: datetime, z: dict, table: pd.DataFrame, fut_last: float, basis: float, basis_note: str,
+            index_quote: float | None = None, fetch_s: float | None = None) -> dict:
+        """Register one snapshot (z = zero_dte row and table = strike_table, both computed at the index price
+        fut_last - basis) and return the data the page shows."""
+        vol = table[["call_volume", "put_volume"]].copy()
+        self.snaps.append(dict(t=now, z=z, vol=vol, fut=fut_last, basis=basis))
+        first, prev, five = self.snaps[0], (self.snaps[-2] if len(self.snaps) > 1 else None), self._back(5)
+
+        def dv(old: dict | None, col: str) -> pd.Series:
+            if old is None:
+                return pd.Series(0.0, index=table.index)
+            return (table[col] - old["vol"][col].reindex(table.index).fillna(0.0)).clip(lower=0.0)
+
+        t = table.copy()
+        for tag, old in (("1", prev), ("5", five), ("0", first if len(self.snaps) > 1 else None)):
+            t["dc" + tag], t["dp" + tag] = dv(old, "call_volume"), dv(old, "put_volume")
+        spot = float(z["spot"])
+        near = t[(t.index >= spot - HALF_WIDTH) & (t.index <= spot + HALF_WIDTH)]
+        rows = [dict(k=float(k), cg=_f(r.call_gex / 1e6, 1), pg=_f(r.put_gex / 1e6, 1), net=_f((r.call_gex + r.put_gex) / 1e6, 1),
+                     vx=_f(r.vanna / 1e6), ch=_f(r.charm / 1e6), co=int(r.call_oi), po=int(r.put_oi), cv=int(r.call_volume),
+                     pv=int(r.put_volume), dc1=int(r.dc1), dp1=int(r.dp1), dc5=int(r.dc5), dp5=int(r.dp5), dc0=int(r.dc0), dp0=int(r.dp0))
+                for k, r in near.iterrows()]
+        win = "5" if five is not None else "1"
+        act = (t["dc" + win] + t["dp" + win]).sort_values(ascending=False, kind="stable")
+        movers = [dict(k=float(k), dc=int(t.at[k, "dc" + win]), dp=int(t.at[k, "dp" + win]), dc0=int(t.at[k, "dc0"]), dp0=int(t.at[k, "dp0"]),
+                       cv=int(t.at[k, "call_volume"]), pv=int(t.at[k, "put_volume"]), co=int(t.at[k, "call_oi"]), po=int(t.at[k, "put_oi"]))
+                  for k in act.index[:TOP] if act[k] > 0]
+        hist = [dict(t=s["t"].strftime("%H:%M"), fut=_f(s["fut"]), net=_f((s["z"].get("net_gex") or 0) / 1e9, 3),
+                     flip=_f(None if s["z"].get("gamma_flip") is None else s["z"]["gamma_flip"] + s["basis"]),
+                     cw=_f(None if s["z"].get("call_wall") is None else s["z"]["call_wall"] + s["basis"]),
+                     pw=_f(None if s["z"].get("put_wall") is None else s["z"]["put_wall"] + s["basis"])) for s in self.snaps]
+        m = dict(asof=now.isoformat(timespec="seconds"), clock=now.strftime("%H:%M:%S"), day=now.strftime("%a %d %b %Y"),
+                 expiry=z.get("expiry"), spot=_f(spot), indexQuote=_f(index_quote), basis=_f(basis), basisNote=basis_note,
+                 future=self.future, futLast=_f(fut_last), flip=_f(z.get("gamma_flip")), callWall=_f(z.get("call_wall")),
+                 putWall=_f(z.get("put_wall")), net=_f(z.get("net_gex"), 0), regime=z.get("regime"),
+                 callOi=int(z.get("call_oi") or 0), putOi=int(z.get("put_oi") or 0),
+                 callVol=int(table.call_volume.sum()), putVol=int(table.put_volume.sum()),
+                 topCall=z.get("top_call_oi") or "", topPut=z.get("top_put_oi") or "",
+                 cg=_f(table.call_gex.sum() / 1e6, 1), pg=_f(table.put_gex.sum() / 1e6, 1), vex=_f(table.vanna.sum() / 1e6),
+                 chx=_f(table.charm.sum() / 1e6), fetchS=_f(fetch_s, 1), every=self.every_s, refresh=self.refresh_s,
+                 snaps=len(self.snaps), first=first["t"].strftime("%H:%M"), win=("5 minutes" if win == "5" else "1 snapshot"),
+                 prevClock=prev["t"].strftime("%H:%M:%S") if prev else None)
+        return dict(M=m, R=rows, movers=movers, H=hist[-480:], notes=self.notes(win))
+
+    def notes(self, win: str) -> list[str]:
+        """Plain sentences on what moved: against five minutes ago when the run is that old, and against the start."""
+        cur = self.snaps[-1]
+        out: list[str] = []
+        for label, old in (("in the last 5 minutes", self._back(5)), (f"since {self.snaps[0]['t']:%H:%M}", self.snaps[0] if len(self.snaps) > 1 else None)):
+            if old is None or old is cur:
+                continue
+            z, o, b = cur["z"], old["z"], cur["basis"]
+            if z.get("regime") != o.get("regime") and z.get("regime") and o.get("regime"):
+                out.append(f"Regime changed from {o['regime']} to {z['regime']} {label}.")
+            for key, name in (("call_wall", "Call wall"), ("put_wall", "Put wall")):
+                if z.get(key) is not None and o.get(key) is not None and z[key] != o[key]:
+                    out.append(f"{name} moved from {o[key] + old['basis']:,.2f} to {z[key] + b:,.2f} {label}.")
+            if z.get("gamma_flip") is not None and o.get("gamma_flip") is not None:
+                d = (z["gamma_flip"] + b) - (o["gamma_flip"] + old["basis"])
+                if abs(d) >= 3:
+                    out.append(f"Gamma flip moved {d:+,.2f} points to {z['gamma_flip'] + b:,.2f} {label}.")
+            if z.get("net_gex") is not None and o.get("net_gex") is not None:
+                d = (z["net_gex"] - o["net_gex"]) / 1e9
+                if abs(d) >= 0.25:
+                    out.append(f"Net gamma changed {d:+.2f}bn to {z['net_gex'] / 1e9:+.2f}bn {label}.")
+            d = cur["fut"] - old["fut"]
+            if abs(d) >= 5:
+                out.append(f"{self.future.lstrip(chr(47))} moved {d:+,.2f} points {label}.")
+        seen, uniq = set(), []
+        for s in out:
+            if s not in seen:
+                seen.add(s)
+                uniq.append(s)
+        return uniq
+
+
+def render(data: dict) -> str:
+    """The page as one standalone HTML file (it reloads itself every `refresh` seconds)."""
+    html = TEMPLATE.read_text(encoding="utf-8")
+    blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    return html.replace("/*DATA*/null", blob).replace("__REFRESH__", str(int(data["M"].get("refresh") or 20)))
+
+
+def write(path: Path, data: dict) -> None:
+    """Write the page in one step (a temporary file, then a rename) so the browser never loads half a page."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(render(data), encoding="utf-8")
+    tmp.replace(path)

@@ -90,8 +90,16 @@ def snapshot(client: ReadOnlyClient, symbol: str, now: datetime, days: int, stri
 
 
 def snapshot_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead: int = ZERO_DTE_LOOKAHEAD) -> dict:
+    """One summary row (zero_dte) from fetch_0dte."""
+    c, spot = fetch_0dte(client, symbol, now, lookahead)
+    return zero_dte(c, spot, now, symbol)
+
+
+def fetch_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead: int = ZERO_DTE_LOOKAHEAD,
+               out: Path | None = None, pause: float = 0.3) -> tuple[pd.DataFrame, float]:
     """The nearest live expiry of `symbol` with every strike Schwab lists (no strike_count), calls and puts in separate
-    requests, one expiry day per request. Before 16:00 ET the search starts today (the 0DTE), afterwards tomorrow."""
+    requests, one expiry day per request. Before 16:00 ET the search starts today (the 0DTE), afterwards tomorrow.
+    Returns the contract rows and the underlying price, and saves the rows under `out` (default <SYMBOL>_0DTE/)."""
     from schwab.client import Client
     CALL, PUT = Client.Options.ContractType.CALL, Client.Options.ContractType.PUT
     day = now.date() if (now.hour, now.minute) < (16, 0) else now.date() + timedelta(days=1)
@@ -110,15 +118,15 @@ def snapshot_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead:
                 if len(part):
                     parts.append(part)
                 del chain
-                time.sleep(0.3)
+                time.sleep(pause)
         except Exception as exc:  # a day Schwab refuses is skipped; the error is reported if no day works
             last = exc
         if parts and spot is not None:
             c = pd.concat(parts, ignore_index=True)
-            d = OUT / (folder(symbol) + "_0DTE")
+            d = out or OUT / (folder(symbol) + "_0DTE")
             d.mkdir(parents=True, exist_ok=True)
             c.assign(spot=spot, asof=now.isoformat(timespec="minutes")).to_parquet(d / f"{now:%Y-%m-%d_%H%M}.parquet")
-            return zero_dte(c, spot, now, symbol)
+            return c, spot
         day += timedelta(days=1)
     raise ValueError(f"no expiry found for {symbol} within {lookahead} days (last error: {last!r})")
 

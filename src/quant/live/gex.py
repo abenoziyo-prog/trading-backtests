@@ -237,3 +237,38 @@ def futures_levels(z: dict, bars: list, now: datetime, future: str) -> dict:
         if z.get(k) is not None and not pd.isna(z.get(k)):
             out["fut_" + k] = round(float(z[k]) + basis, 2)
     return out
+
+
+def strike_table(c: pd.DataFrame, spot: float, asof: datetime) -> pd.DataFrame:
+    """Per strike of the nearest live expiry, indexed by strike (same convention as zero_dte: dealers long calls,
+    short puts):
+      call_gex, put_gex     dollars of dealer gamma per 1% move (put_gex <= 0)
+      vanna                 dollars of dealer delta gained per +1 point of implied volatility
+      charm                 dollars of dealer delta gained per hour of time passing
+      call_oi, put_oi       open interest (the previous close's figure)
+      call_volume, put_volume   contracts traded so far today, including strikes with no open interest
+    Greeks are Black-Scholes at `spot` with zero rates, from each contract's implied volatility."""
+    cols = ["call_gex", "put_gex", "vanna", "charm", "call_oi", "put_oi", "call_volume", "put_volume"]
+    exp = nearest_expiry(c, asof)
+    if exp is None:
+        return pd.DataFrame(columns=cols, dtype=float)
+    c = c[(c.expiry == exp) & (c.strike > 0)].astype({"open_interest": float, "volume": float, "iv": float, "strike": float})
+    call = (c.put_call == "CALL").to_numpy()
+    out = pd.DataFrame(dict(call_oi=c[call].groupby("strike").open_interest.sum(), put_oi=c[~call].groupby("strike").open_interest.sum(),
+                            call_volume=c[call].groupby("strike").volume.sum(), put_volume=c[~call].groupby("strike").volume.sum()))
+    g = c[(c.open_interest > 0) & c.iv.notna()].reset_index(drop=True)
+    if len(g):
+        t = years_left(g.expiry, asof)
+        k, sig = g.strike.to_numpy(), g.iv.to_numpy() / 100.0
+        sd = sig * np.sqrt(t)
+        d1 = (np.log(spot / k) + 0.5 * sd ** 2) / sd
+        d2 = d1 - sd
+        phi = np.exp(-0.5 * d1 ** 2) / math.sqrt(2 * math.pi)
+        sign = np.where(g.put_call.to_numpy() == "CALL", 1.0, -1.0)
+        pos = sign * g.open_interest.to_numpy() * g.multiplier.to_numpy()
+        gx = pos * phi / (spot * sd) * spot ** 2 * 0.01
+        f = pd.DataFrame(dict(strike=k, call_gex=np.where(sign > 0, gx, 0.0), put_gex=np.where(sign < 0, gx, 0.0),
+                              vanna=pos * (-phi * d2 / sig) * 0.01 * spot,
+                              charm=pos * (phi * d2 / (2 * t)) * (60.0 / YEAR_MIN) * spot)).groupby("strike").sum()
+        out = out.join(f, how="outer")
+    return out.reindex(columns=cols).fillna(0.0).sort_index()

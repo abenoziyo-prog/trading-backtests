@@ -86,3 +86,28 @@ Schwab's login expires after 7 days. When a run fails with an authorization erro
 - **Local and cloud files are separate copies.** A local run writes to this computer only; the cloud runner keeps
   writing to its database on its own schedule.
 - Run before 16:00 New York time for today's expiry. After that the 0DTE row describes the next session's expiry.
+
+## Live map during the session
+
+`bots/gex_live.py` repeats the SPX 0DTE fetch every minute and rewrites one page that reloads itself in the browser:
+
+```bash
+cd ~/trading-backtests && source .venv/bin/activate
+python bots/gex_live.py --open          # every 60 seconds until 16:15 New York; Ctrl-C stops
+python bots/gex_live.py --every 30      # faster; 20 seconds is the floor
+```
+
+The page is `data/schwab/gex/live/es_map.html`. It shows the flip and the walls on `/ES`, gamma, vanna and charm per
+level, and a "What changed" block: the strikes with the most contracts traded since the last snapshot, over five
+minutes and since the start, plus any move of the walls, the flip, the regime or net gamma. Each snapshot is also
+kept (`SPX_IDX_0DTE/live/<date>/`) and one row per snapshot goes to `gex_live.csv`.
+
+Things to know:
+
+- Each cycle is three requests (calls, puts, the `/ES` price). Schwab's limit is reported as 120 requests a minute.
+- The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the
+  future also before 09:30. The basis is fixed when the run starts: start it before the open when you can, so it is
+  taken at the previous cash close.
+- Open interest does not change during the day. "New positioning" is read from volume, which shows where contracts
+  trade but not whether dealers bought or sold them.
+- The status line on the page turns red when the last snapshot is more than three cycles old: the script stopped.

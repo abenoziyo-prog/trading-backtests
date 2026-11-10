@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="__REFRESH__">
+<title>ES Dealer Map (live)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* layout: header with regime, a row of key levels, then one tall strike ladder (price on the vertical axis, like a chart) */
+:root{--bg:#f6f6f4;--surface:#fcfcfb;--fg:#0b0b0b;--fg2:#52514e;--muted:#8a8984;--grid:#e4e3de;--pos:#2a78d6;--neg:#e34948;--mid:#f0efec;--line:#0b0b0b;--flip:#6250d6;--good:#0ca30c;
+--display:"Space Grotesk",system-ui,sans-serif;--body:Inter,system-ui,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111110;--surface:#1a1a19;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--grid:#2e2e2b;--pos:#3987e5;--neg:#e66767;--mid:#383835;--line:#f0efec;--flip:#9085e9;--good:#2fc02f;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#111110;--surface:#1a1a19;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--grid:#2e2e2b;--pos:#3987e5;--neg:#e66767;--mid:#383835;--line:#f0efec;--flip:#9085e9;--good:#2fc02f;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:14px;line-height:1.45}
+.wrap{max-width:860px;margin:0 auto;padding-block:28px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:20px}
+h1{font-family:var(--display);font-size:26px;font-weight:600;margin:0;text-wrap:balance}
+.sub{color:var(--fg2);margin:4px 0 0}
+.regime{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 14px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px;letter-spacing:.04em;text-transform:uppercase;padding:4px 10px;border-radius:999px;border:1.5px solid var(--pos);color:var(--fg)}
+.pill i{width:9px;height:9px;border-radius:50%;background:var(--pos);display:inline-block}
+.pill.neg{border-color:var(--neg)}.pill.neg i{background:var(--neg)}
+.big{font-family:var(--display);font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:0;background:var(--surface);border:1px solid var(--grid);border-radius:8px;overflow:hidden}
+.lv{background:var(--surface);padding:10px 12px;min-width:0;box-shadow:1px 0 0 var(--grid),0 1px 0 var(--grid)}
+.lv b{display:block;font-family:var(--display);font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.lv span{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--fg2);display:flex;align-items:center;gap:6px}
+.lv small{color:var(--muted);font-size:12px}
+.key{width:14px;height:0;border-top:2px solid var(--line);display:inline-block}
+.key.flip{border-top:2px dashed var(--flip)}.key.pain{border-top:2px dotted var(--muted)}
+.key.box{height:9px;width:9px;border:0;border-radius:2px;background:var(--pos)}.key.box.neg{background:var(--neg)}
+.card{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:14px 10px 10px}
+.card h2{font-family:var(--display);font-size:15px;font-weight:600;margin:0 6px 2px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;margin:4px 6px 8px;color:var(--fg2);font-size:12.5px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+svg{display:block;width:100%;height:auto;font-family:var(--body)}
+svg text{fill:var(--fg2);font-size:11px;font-variant-numeric:tabular-nums}
+svg text.lab{pointer-events:none;fill:var(--fg);font-weight:600;font-size:11.5px;paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round}
+.tip{position:fixed;pointer-events:none;background:var(--fg);color:var(--bg);padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums;z-index:5;max-width:220px}
+.tip b{font-size:13px}
+.notes{color:var(--fg2);font-size:13px;max-width:65ch}
+.notes li{margin:4px 0}
+details{color:var(--fg2)}summary{cursor:pointer;font-weight:500;color:var(--fg)}
+.tw{overflow-x:auto;margin-top:8px}
+table{border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums;width:100%}
+th,td{text-align:right;padding:4px 10px;border-bottom:1px solid var(--grid);white-space:nowrap}
+th{font-weight:500;color:var(--fg2)}
+
+.seg{display:inline-flex;border:1px solid var(--grid);border-radius:6px;overflow:hidden;margin:2px 6px 8px}
+.seg button{font:inherit;font-size:12.5px;padding:5px 12px;border:0;background:transparent;color:var(--fg2);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--fg);color:var(--bg)}
+.seg button:focus-visible{outline:2px solid var(--flip);outline-offset:-2px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px}
+.card p{margin:2px 6px 8px;color:var(--fg2);font-size:13px;max-width:62ch}
+.card p b{color:var(--fg);font-weight:600}
+h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8px}
+.todo{border-style:dashed}
+.todo li{margin:4px 0}.todo ul{margin:4px 6px;padding-left:18px;color:var(--fg2);font-size:13px;max-width:62ch}
+.key.net{border-top:0;width:3px;height:11px;background:var(--line)}
+
+.status{display:flex;flex-wrap:wrap;gap:4px 16px;color:var(--fg2);font-size:12.5px;margin:6px 0 0}
+.status b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--good);display:inline-block;margin-right:6px}
+.dot.stale{background:var(--neg)}
+.chg li{margin:5px 0;color:var(--fg)}.chg{margin:6px 6px 10px;padding-left:18px;font-size:13.5px;max-width:70ch}
+.mv th,.mv td{padding:5px 10px}.mv td.hot{font-weight:600;color:var(--fg)}
+.mv td:first-child,.mv th:first-child{text-align:left}
+.swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+.tag{font-size:11px;border:1px solid var(--grid);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--fg2);white-space:nowrap}
+</style></head><body style="margin:0">
+<div class="wrap">
+ <header>
+  <h1 id="h1"></h1>
+  <p class="sub" id="sub"></p>
+  <div class="status" id="status"></div>
+ </header>
+ <div class="regime"><span class="pill" id="pill"><i></i><span id="reg"></span></span><span class="big" id="net"></span><span class="sub" id="regtxt"></span></div>
+ <div class="levels" id="levels"></div>
+
+ <h2 class="sec">What changed</h2>
+ <div class="card">
+  <h2 id="chgh"></h2>
+  <ul class="chg" id="chg"></ul>
+  <div class="tw"><table class="mv" id="mv"></table></div>
+  <p style="margin-top:8px">Open interest is fixed for the day, so new positioning is read from volume: contracts traded at each strike between two snapshots. Volume does not say who bought and who sold. "New today" marks a side whose volume today already exceeds its open interest.</p>
+ </div>
+
+ <h2 class="sec">Map</h2>
+ <div class="two" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+  <div class="card">
+   <h2>Gamma exposure by level ($M per 1% move)</h2>
+   <div class="seg" role="group" aria-label="Bar type"><button data-g="mode" data-v="split">Calls vs puts</button><button data-g="mode" data-v="net">Net</button></div>
+   <div class="legend" id="lg1"></div>
+   <div id="chart"></div>
+  </div>
+  <div class="card">
+   <h2>New volume by level (contracts)</h2>
+   <div class="seg" role="group" aria-label="Window"><button data-g="win" data-v="1">Last snapshot</button><button data-g="win" data-v="5">5 minutes</button><button data-g="win" data-v="0">Since start</button></div>
+   <div class="legend"><span><i class="key box"></i>Calls traded</span><span><i class="key box neg"></i>Puts traded</span><span><i class="key"></i>Last</span><span><i class="key flip"></i>Gamma flip</span></div>
+   <div id="vol"></div>
+  </div>
+ </div>
+
+ <h2 class="sec">Levels through the session</h2>
+ <div class="card">
+  <h2 id="hh"></h2>
+  <div class="legend"><span><i class="key"></i>Last price</span><span><i class="key flip"></i>Gamma flip</span><span><i class="key box"></i>Call wall</span><span><i class="key box neg"></i>Put wall</span></div>
+  <div id="hist"></div>
+ </div>
+
+ <h2 class="sec">Vanna and charm exposure</h2>
+ <div class="two">
+  <div class="card"><h2>Vanna ($M of dealer delta per +1 vol point)</h2><p id="vtxt"></p><div id="vchart"></div></div>
+  <div class="card"><h2>Charm ($M of dealer delta per hour)</h2><p id="ctxt"></p><div id="cchart"></div></div>
+ </div>
+
+ <ul class="notes" id="notes"></ul>
+ <details><summary>Table view</summary><div class="tw"><table id="tbl"></table></div></details>
+</div>
+<div class="tip" id="tip" hidden></div>
+<script>
+const D=/*DATA*/null;
+const M=D.M, R=D.R, B=M.basis, F=M.future.replace('/','');
+const $=i=>document.getElementById(i), f=n=>n==null?'n/a':n.toLocaleString('en-US',{maximumFractionDigits:2}), f0=n=>n==null?'n/a':Math.round(n).toLocaleString('en-US'), sg=n=>n==null?'n/a':(n>0?'+':n<0?'\u2212':'')+f(Math.abs(n));
+const E=k=>k==null?null:k+B;
+const store={get(k,d){try{return localStorage.getItem('gexmap.'+k)||d}catch(e){return d}},set(k,v){try{localStorage.setItem('gexmap.'+k,v)}catch(e){}}};
+const S={mode:store.get('mode','split'),win:store.get('win',M.snaps>5?'5':'1')};
+$('h1').textContent=`${F} dealer map, live`;
+$('sub').textContent=`SPX options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by the basis of ${sg(B)} points (${M.basisNote})`;
+const age=()=>Math.round((Date.now()-new Date(M.asof).getTime())/1000);
+function status(){const a=age(), stale=a>Math.max(3*M.every,180);
+ $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+Math.round(a/60)+' minutes old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span><span>every ${M.every}s, page reloads every ${M.refresh}s</span>`}
+status();setInterval(status,1000);
+$('reg').textContent=(M.regime||'unknown')+' gamma';
+if(M.regime!=='positive')$('pill').classList.add('neg');
+$('net').textContent=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn';
+$('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.spot-M.flip))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
+const firstOi=s=>{if(!s)return[null,null];const[k,v]=s.split('|')[0].split(':');return[+k,+v]}, tc=firstOi(M.topCall), tp=firstOi(M.topPut);
+const lv=[[F+' last','<i class="key"></i>',f(M.futLast),'index equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip)),'SPX '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall)),'SPX '+f0(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall)),'SPX '+f0(M.putWall)],['Basis','',sg(B),M.basisNote],['SPX quote','',f(M.indexQuote),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn','all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn','all strikes'],['Net vanna','',sg(M.vex)+'M','per +1 vol point'],['Net charm','',sg(M.chx)+'M','per hour'],['Volume today','',f0(M.callVol+M.putVol),f0(M.callVol)+' calls, '+f0(M.putVol)+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
+$('levels').innerHTML=lv.map(l=>`<div class="lv"><span>${l[1]}${l[0]}</span><b>${l[2]}</b><small>${l[3]}</small></div>`).join('');
+// what changed
+$('chgh').textContent=M.snaps<2?'First snapshot of this run: changes appear from the next one':`Most active strikes over the last ${M.win}, and level moves`;
+$('chg').innerHTML=(D.notes.length?D.notes:[M.snaps<2?'Nothing to compare yet.':'No level moved by a notable amount.']).map(s=>`<li>${s}</li>`).join('');
+const fresh=(v,oi)=>v>oi&&v>=50?'<span class="tag">new today</span>':'';
+$('mv').innerHTML=D.movers.length?'<tr><th>'+F+' level</th><th>SPX strike</th><th>Calls traded</th><th>Puts traded</th><th>Calls today / OI</th><th>Puts today / OI</th></tr>'+D.movers.map(r=>`<tr><td><i class="swatch" style="background:var(--${r.dc>=r.dp?'pos':'neg'})"></i>${f(E(r.k))}</td><td>${f0(r.k)}</td><td class="${r.dc>=r.dp?'hot':''}">${f0(r.dc)}</td><td class="${r.dp>r.dc?'hot':''}">${f0(r.dp)}</td><td>${f0(r.cv)} / ${f0(r.co)}${fresh(r.cv,r.co)}</td><td>${f0(r.pv)} / ${f0(r.po)}${fresh(r.pv,r.po)}</td></tr>`).join(''):'';
+const vmx=R.reduce((a,r)=>Math.abs(r.vx)>Math.abs(a.vx)?r:a,R[0]||{vx:0,k:null}), cmx=R.reduce((a,r)=>Math.abs(r.ch)>Math.abs(a.ch)?r:a,R[0]||{ch:0,k:null});
+$('vtxt').innerHTML=`Total <b>${sg(M.vex)}M</b>. Under the convention, a 1 point rise in implied volatility adds that much to dealer delta, which they would hedge by ${M.vex>0?'selling':'buying'}. Largest level: <b>${f(E(vmx.k))}</b>.`;
+$('ctxt').innerHTML=`Total <b>${sg(M.chx)}M</b> per hour. Under the convention, the passing of time ${M.chx<0?'removes':'adds'} that much dealer delta each hour, which they would hedge by ${M.chx<0?'buying':'selling'}. Largest level: <b>${f(E(cmx.k))}</b>.`;
+const rows=[...R].sort((a,b)=>b.k-a.k), tip=$('tip'), kmax=rows.length?rows[0].k:0, step=rows.length>1?rows[0].k-rows[1].k:5;
+const nice=v=>{if(!(v>0))return 1;const p=Math.pow(10,Math.floor(Math.log10(v)));return [1,1.2,1.5,2,2.5,3,4,5,6,8,10].map(m=>m*p).find(m=>m>=v)};
+function bar(x0,w,pos,yy,hh,fill,op){if(!(w>0))return'';w=Math.max(w,1);const rr=Math.min(3,w/2);
+ const d=pos?`M${x0},${yy}h${w-rr}a${rr},${rr} 0 0 1 ${rr},${rr}v${hh-2*rr}a${rr},${rr} 0 0 1 ${-rr},${rr}h${-(w-rr)}z`:`M${x0},${yy}h${-(w-rr)}a${rr},${rr} 0 0 0 ${-rr},${rr}v${hh-2*rr}a${rr},${rr} 0 0 0 ${rr},${rr}h${w-rr}z`;
+ return `<path d="${d}" fill="var(--${fill})" opacity="${op}"/>`}
+// kind: gex | vol | vx | ch ; main = labels in the right margin
+function ladder(o){const box=$(o.el);if(!rows.length){box.textContent='No strikes with data near the price.';return}
+ const W=Math.max(280,Math.min(o.main?560:420,box.clientWidth||520)), nar=W<460, rh=o.main?12:11, mt=14, mb=26, ml=nar?44:52, mr=o.main?(nar?118:140):14, H=mt+mb+rows.length*rh;
+ const y=k=>mt+(kmax-k)/step*rh+rh/2, two=(o.kind==='gex'&&S.mode==='split')||o.kind==='vol';
+ const pr=r=>o.kind==='vol'?[r['dc'+S.win],-r['dp'+S.win]]:[r.cg,r.pg];
+ const val=r=>o.kind==='gex'?r.net:o.kind==='vx'?r.vx:r.ch;
+ const vmax=nice(Math.max(...rows.map(r=>two?Math.max(pr(r)[0],-pr(r)[1]):Math.abs(val(r))))), x0=ml+(W-ml-mr)/2, xs=(W-ml-mr)/2/vmax, x=v=>x0+v*xs;
+ let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${o.aria}">`, lab='';
+ for(let v=-vmax;v<=vmax+1e-9;v+=vmax/2){s+=`<line x1="${x(v)}" x2="${x(v)}" y1="${mt}" y2="${H-mb}" stroke="var(--grid)" stroke-width="1"/><text x="${x(v)}" y="${H-8}" text-anchor="middle">${o.kind==='vol'?f(Math.abs(v)):(v>0?'+':'')+f(v)}</text>`}
+ rows.forEach(r=>{if(r.k%25===0)s+=`<text x="${ml-8}" y="${y(r.k)+4}" text-anchor="end">${f0(E(r.k))}</text><line x1="${ml-4}" x2="${ml}" y1="${y(r.k)}" y2="${y(r.k)}" stroke="var(--muted)"/>`});
+ const refs=[{v:M.spot,t:F+' last '+f(M.futLast),c:'var(--line)',d:''}];
+ if(M.flip!=null)refs.push({v:M.flip,t:(nar?'Flip ':'Gamma flip ')+f(E(M.flip)),c:'var(--flip)',d:'6 4'});
+ if(o.main){if(M.callWall!=null)refs.push({v:M.callWall+.01,t:'Call wall '+f0(E(M.callWall)),w:1});if(M.putWall!=null)refs.push({v:M.putWall,t:'Put wall '+f0(E(M.putWall)),w:1})}
+ refs.sort((a,b)=>b.v-a.v);
+ let last=-99;refs.forEach(r=>{const yy=y(r.v);if(yy<mt-2||yy>H-mb+2)return;r.ly=Math.max(yy,last+15);last=r.ly;
+  if(!r.w)s+=`<line x1="${ml}" x2="${W-mr+(o.main?4:0)}" y1="${yy}" y2="${yy}" stroke="${r.c}" stroke-width="${r.d?1.5:2}" stroke-dasharray="${r.d}"/>`;
+  if(o.main){s+=`<line x1="${W-mr+4}" x2="${W-mr+10}" y1="${yy}" y2="${r.ly}" stroke="${r.w?'var(--muted)':r.c}" stroke-width="1"/>`;lab+=`<text class="lab" x="${W-mr+13}" y="${r.ly+4}">${r.t}</text>`}});
+ rows.forEach((r,i)=>{const yy=y(r.k)-(rh-2)/2, hh=rh-2, cw=r.k===M.callWall, pw=r.k===M.putWall;
+  if(two){const[a,b]=pr(r), g=o.kind==='gex';s+=bar(x0,a*xs,true,yy,hh,'pos',g?(cw?1:.6):.85)+bar(x0,-b*xs,false,yy,hh,'neg',g?(pw?1:.6):.85);
+   if(g)s+=`<rect x="${x(r.net)-1.5}" y="${yy-1}" width="3" height="${hh+2}" fill="var(--line)" stroke="var(--surface)" stroke-width="1"/>`}
+  else{const v=val(r), pos=v>=0;s+=bar(x0,Math.abs(v)*xs,pos,yy,hh,pos?'pos':'neg',o.kind==='gex'&&(cw||pw)?1:.72)}
+  s+=`<rect class="hit" data-i="${i}" x="${ml}" y="${y(r.k)-rh/2}" width="${W-ml-mr}" height="${rh}" fill="transparent"/>`});
+ s+=`<line x1="${x0}" x2="${x0}" y1="${mt}" y2="${H-mb}" stroke="var(--muted)" stroke-width="1"/>`+lab+'</svg>';box.innerHTML=s;
+ box.querySelectorAll('.hit').forEach(h=>{const r=rows[+h.dataset.i];
+  const show=e=>{tip.hidden=false;tip.innerHTML=`<b>${F} ${f(E(r.k))}</b> \u00b7 SPX ${f0(r.k)}<br>`+(o.kind==='gex'?`Net ${sg(r.net)}M<br>Calls ${sg(r.cg)}M \u00b7 OI ${f0(r.co)}<br>Puts ${sg(r.pg)}M \u00b7 OI ${f0(r.po)}`:o.kind==='vol'?`Calls: +${f0(r.dc1)} last, +${f0(r.dc5)} in 5 min, +${f0(r.dc0)} since start<br>Puts: +${f0(r.dp1)} last, +${f0(r.dp5)} in 5 min, +${f0(r.dp0)} since start<br>Today ${f0(r.cv)} calls \u00b7 ${f0(r.pv)} puts<br>OI ${f0(r.co)} calls \u00b7 ${f0(r.po)} puts`:o.kind==='vx'?`Vanna ${sg(r.vx)}M per vol point`:`Charm ${sg(r.ch)}M per hour`);tip.style.left=Math.max(4,Math.min(e.clientX+14,innerWidth-236))+'px';tip.style.top=(e.clientY+14)+'px'};
+  h.addEventListener('pointermove',show);h.addEventListener('pointerdown',show);h.addEventListener('pointerleave',()=>tip.hidden=true)})}
+function history(){const H0=D.H, box=$('hist');$('hh').textContent=`${F} price and the levels, ${H0.length} snapshot${H0.length===1?'':'s'} since ${M.first} New York`;
+ if(H0.length<2){box.innerHTML='<p>This chart needs at least two snapshots.</p>';return}
+ const W=Math.max(300,Math.min(840,box.clientWidth||840)), Ht=260, ml=56, mr=14, mt=10, mb=26, n=H0.length;
+ const vals=H0.flatMap(h=>[h.fut,h.flip,h.cw,h.pw]).filter(v=>v!=null), lo0=Math.min(...vals), hi0=Math.max(...vals), pad=Math.max(3,(hi0-lo0)*.08), lo=lo0-pad, hi=hi0+pad;
+ const x=i=>ml+(W-ml-mr)*i/(n-1), y=v=>mt+(Ht-mt-mb)*(hi-v)/(hi-lo);
+ const stepv=nice((hi-lo)/5);let s=`<svg viewBox="0 0 ${W} ${Ht}" role="img" aria-label="Price and levels over time">`;
+ for(let v=Math.ceil(lo/stepv)*stepv;v<=hi;v+=stepv)s+=`<line x1="${ml}" x2="${W-mr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/><text x="${ml-8}" y="${y(v)+4}" text-anchor="end">${f0(v)}</text>`;
+ const ticks=Math.min(6,n);for(let j=0;j<ticks;j++){const i=Math.round(j*(n-1)/(ticks-1||1));s+=`<text x="${x(i)}" y="${Ht-8}" text-anchor="${j===0?'start':j===ticks-1?'end':'middle'}">${H0[i].t}</text>`}
+ const path=(key,stepped)=>{let d='',pen=false;H0.forEach((h,i)=>{const v=h[key];if(v==null){pen=false;return}if(!pen){d+=`M${x(i)},${y(v)}`;pen=true}else d+=stepped?`H${x(i)}V${y(v)}`:`L${x(i)},${y(v)}`});return d};
+ s+=`<path d="${path('cw',1)}" fill="none" stroke="var(--pos)" stroke-width="2"/><path d="${path('pw',1)}" fill="none" stroke="var(--neg)" stroke-width="2"/><path d="${path('flip',0)}" fill="none" stroke="var(--flip)" stroke-width="1.5" stroke-dasharray="6 4"/><path d="${path('fut',0)}" fill="none" stroke="var(--line)" stroke-width="2"/>`;
+ s+=`<rect id="hx" x="${ml}" y="${mt}" width="${W-ml-mr}" height="${Ht-mt-mb}" fill="transparent"/><line id="hc" y1="${mt}" y2="${Ht-mb}" stroke="var(--muted)" stroke-width="1" visibility="hidden"/></svg>`;box.innerHTML=s;
+ const hx=box.querySelector('#hx'), hc=box.querySelector('#hc');
+ const show=e=>{const b=hx.getBoundingClientRect(), i=Math.max(0,Math.min(n-1,Math.round((e.clientX-b.left)/b.width*(n-1)))), h=H0[i];hc.setAttribute('x1',x(i));hc.setAttribute('x2',x(i));hc.setAttribute('visibility','visible');
+  tip.hidden=false;tip.innerHTML=`<b>${h.t}</b><br>${F} ${f(h.fut)}<br>Call wall ${f(h.cw)}<br>Gamma flip ${f(h.flip)}<br>Put wall ${f(h.pw)}<br>Net gamma ${sg(h.net)}bn`;tip.style.left=Math.max(4,Math.min(e.clientX+14,innerWidth-236))+'px';tip.style.top=(e.clientY+14)+'px'};
+ hx.addEventListener('pointermove',show);hx.addEventListener('pointerdown',show);hx.addEventListener('pointerleave',()=>{tip.hidden=true;hc.setAttribute('visibility','hidden')})}
+function draw(){
+ document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed',S[b.dataset.g]===b.dataset.v));
+ $('lg1').innerHTML=(S.mode==='split'?'<span><i class="key box"></i>Call gamma</span><span><i class="key box neg"></i>Put gamma</span><span><i class="key net"></i>Net</span>':'<span><i class="key box"></i>Net positive</span><span><i class="key box neg"></i>Net negative</span>')+'<span><i class="key"></i>Last</span><span><i class="key flip"></i>Gamma flip</span>';
+ ladder({el:'chart',kind:'gex',main:true,aria:'Gamma exposure by level'});ladder({el:'vol',kind:'vol',main:true,aria:'New volume by level'});
+ ladder({el:'vchart',kind:'vx',aria:'Vanna exposure by level'});ladder({el:'cchart',kind:'ch',aria:'Charm exposure by level'});history()}
+document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{S[b.dataset.g]=b.dataset.v;store.set(b.dataset.g,b.dataset.v);draw()}));
+draw();let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(draw,120)});
+$('notes').innerHTML=[`Every level is the SPX level plus the basis of ${sg(B)} points (${M.basisNote}). The basis drifts by a point or two in a day, so read the levels as zones a few points wide.`,
+ `Gamma, vanna and charm are computed at the index price implied by ${F} (last price minus the basis), so the map follows the future in real time, also before the cash open.`,
+ 'Signs assume dealers are long calls and short puts. That is a convention, not a measurement, and it is least reliable for same-day options.',
+ 'Open interest is the overnight figure and does not change during the day. Volume shows where trading happens, not whether dealers bought or sold.',
+ 'Ladders show strikes within 200 index points of the price. Totals in the tiles use every strike.'].map(s=>`<li>${s}</li>`).join('');
+$('tbl').innerHTML='<tr><th>'+F+' level</th><th>SPX strike</th><th>Net GEX ($M)</th><th>Call GEX</th><th>Put GEX</th><th>Vanna</th><th>Charm</th><th>Call OI</th><th>Put OI</th><th>Call vol</th><th>Put vol</th><th>Calls 5m</th><th>Puts 5m</th></tr>'+rows.map(r=>`<tr><td>${f(E(r.k))}</td><td>${f0(r.k)}</td><td>${f(r.net)}</td><td>${f(r.cg)}</td><td>${f(r.pg)}</td><td>${f(r.vx)}</td><td>${f(r.ch)}</td><td>${f0(r.co)}</td><td>${f0(r.po)}</td><td>${f0(r.cv)}</td><td>${f0(r.pv)}</td><td>${f0(r.dc5)}</td><td>${f0(r.dp5)}</td></tr>`).join('');
+</script>
+</body></html>

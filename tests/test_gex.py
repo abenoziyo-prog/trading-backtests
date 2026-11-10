@@ -147,3 +147,90 @@ def test_expired_contracts_are_left_out_after_the_close():
     alone = summary(contracts(chain(call_oi={600: 1000})), 600.0, datetime(2026, 10, 27, 16, 20, tzinfo=NY), "QQQ")
     assert before["net_gex_0dte"] > 0 and before["net_gex"] > 10 * after["net_gex"]
     assert after["net_gex_0dte"] == 0 and after["net_gex"] == alone["net_gex"] and after["expiries"] == 1
+
+
+def zero_chain(pc, today="2026-10-27", extra=None):
+    """One side of an SPX-like chain: a same-day expiry (strikes 7600-7800 by 50) and one 10 days out."""
+    oi = {"CALL": {7700: 900, 7750: 4000, 7800: 2500}, "PUT": {7700: 1200, 7650: 6000, 7600: 3000}}[pc]
+
+    def opt(k, exp, dte, n, **kw):
+        return dict(putCall=pc, strikePrice=k, expirationDate=f"{exp}T20:00:00.000+00:00", daysToExpiration=dte,
+                    openInterest=n, totalVolume=7, volatility=15.0, gamma=0.01, delta=0.5, bid=1, ask=1.1, mark=1.05,
+                    multiplier=100.0, **kw)
+    m = {f"{today}:0": {f"{k:.1f}": [opt(k, today, 0, oi.get(k, 0))] for k in range(7600, 7801, 50)},
+         "2026-11-06:10": {"7700.0": [opt(7700, "2026-11-06", 10, 99999)]}}
+    for k, row in (extra or {}).items():
+        m[f"{today}:0"].setdefault(k, []).append(row)
+    key = "callExpDateMap" if pc == "CALL" else "putExpDateMap"
+    return {"symbol": "$SPX", "underlyingPrice": 7722.0, key: m, "putExpDateMap" if pc == "CALL" else "callExpDateMap": {}}
+
+
+def test_zero_dte_summary_uses_only_the_nearest_live_expiry():
+    import pandas as pd
+    from quant.live.gex import zero_dte
+    c = pd.concat([contracts(zero_chain("CALL")), contracts(zero_chain("PUT"))], ignore_index=True)
+    z = zero_dte(c, 7722.0, datetime(2026, 10, 27, 9, 20, tzinfo=NY), "$SPX", top=2)
+    assert z["expiry"] == "2026-10-27" and z["dte"] == 0 and z["contracts"] == 6     # the 10-day expiry is ignored
+    assert (z["max_call_oi_strike"], z["max_call_oi"]) == (7750.0, 4000)
+    assert (z["max_put_oi_strike"], z["max_put_oi"]) == (7650.0, 6000)
+    assert z["top_call_oi"] == "7750:4000|7800:2500" and z["top_put_oi"] == "7650:6000|7600:3000"
+    assert z["call_oi"] == 7400 and z["put_oi"] == 10200
+    assert z["regime"] in ("positive", "negative") and z["net_gex"] == z["call_gex"] + z["put_gex"]
+    assert z["call_gex"] > 0 > z["put_gex"]
+    # after the close today's expiry is dead: the next one is described, with its distance in days
+    z2 = zero_dte(c, 7722.0, datetime(2026, 10, 27, 16, 20, tzinfo=NY), "$SPX")
+    assert z2["expiry"] == "2026-11-06" and z2["dte"] == 10 and z2["max_call_oi_strike"] == 7700.0
+    # more call gamma than put gamma near spot -> positive; the mirror image -> negative
+    calls_only = contracts(zero_chain("CALL"))
+    assert zero_dte(calls_only, 7722.0, datetime(2026, 10, 27, 9, 20, tzinfo=NY), "$SPX")["regime"] == "positive"
+    puts_only = contracts(zero_chain("PUT"))
+    assert zero_dte(puts_only, 7722.0, datetime(2026, 10, 27, 9, 20, tzinfo=NY), "$SPX")["regime"] == "negative"
+    assert zero_dte(c.iloc[:0], 7722.0, datetime(2026, 10, 27, 9, 20, tzinfo=NY), "$SPX")["contracts"] == 0
+
+
+def test_am_settled_contracts_are_dropped():
+    from quant.live.gex import drop_am_settled
+    am = dict(putCall="CALL", strikePrice=7750.0, expirationDate="2026-10-27T20:00:00.000+00:00", daysToExpiration=0,
+              openInterest=50000, totalVolume=0, volatility=15.0, multiplier=100.0, settlementType="A")
+    ch = zero_chain("CALL", extra={"7750.0": am, "7900.0": am})
+    c = contracts(drop_am_settled(ch))
+    assert c[c.expiry == "2026-10-27"].open_interest.max() == 4000 and 7900.0 not in set(c.strike)
+
+
+def test_zero_dte_snapshot_asks_for_every_strike_and_skips_days_without_expiry(tmp_path):
+    import importlib.util
+    import json
+    from datetime import date
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("snap0", Path(__file__).resolve().parents[1] / "bots/gex_snapshot.py")
+    snap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(snap)
+    snap.OUT, snap.time.sleep = tmp_path, (lambda s: None)
+    seen = []
+
+    class Resp:
+        def __init__(self, d):
+            self.d = d
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return json.loads(json.dumps(self.d))
+
+    class Fake:
+        def get_option_chain(self, symbol, contract_type=None, from_date=None, to_date=None, **k):
+            seen.append((contract_type.value, from_date, to_date, k))
+            if from_date != date(2026, 10, 27):       # only the 27th has an expiry
+                return Resp(dict(symbol=symbol, status="FAILED", underlyingPrice=7722.0, callExpDateMap={}, putExpDateMap={}))
+            return Resp(zero_chain(contract_type.value))
+
+    client = ReadOnlyClient(Fake(), extra=ReadOnlyClient.OPTION_CHAIN)
+    z = snap.snapshot_0dte(client, "$SPX", datetime(2026, 10, 27, 9, 20, tzinfo=NY))
+    assert z["expiry"] == "2026-10-27" and z["max_put_oi_strike"] == 7650.0 and z["regime"] in ("positive", "negative")
+    assert all(a == b and "strike_count" not in k for _, a, b, k in seen) and len(seen) == 2
+    assert len(list((tmp_path / "SPX_IDX_0DTE").glob("*.parquet"))) == 1
+    # a Friday 16:20 run starts at the next day and walks forward to the first expiry
+    seen.clear()
+    z = snap.snapshot_0dte(client, "$SPX", datetime(2026, 10, 23, 16, 20, tzinfo=NY))
+    assert z["expiry"] == "2026-10-27" and z["dte"] == 4 and seen[0][1] == date(2026, 10, 24)

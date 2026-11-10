@@ -10,7 +10,8 @@ sandbox). Keeps the bot's files in a database instead of a volume.
   4. every SYNC_S seconds: save changed files back to the database (the token refresh, bars, ledger, audit)
   5. Mon-Sat 18:30 ET: run bots/schwab_archiver.py (/NQ, QQQ, /ES, SPY, VIX family 1-minute history), then
      bots/fetch_spx_gex.py (SqueezeMetrics' daily S&P GEX history, not Schwab), log the database size, save
-  6. trading days 09:20 and 16:20 ET: run bots/gex_snapshot.py (option chains -> dealer gamma), then save
+  6. trading days 09:20 and 16:20 ET: run bots/gex_snapshot.py (option chains -> dealer gamma, plus the
+     SPX and NDX 0DTE rows in gex_0dte.csv), then save
   7. trading days 09:25-16:15 ET: keep bots/option_flow_capture.py --loop running (near-expiry chains every 5 minutes;
      the 16:20 snapshot waits for it to end, so the two never hold memory at the same time)
   8. on SIGTERM (redeploy/stop): stop the bot, final save, exit
@@ -42,7 +43,7 @@ SYNC_DIRS = ["state/nqbot", "data/schwab"]
 SKIP = {".tmp"}  # half-written files are never saved
 # write-once archives the container never reads back: kept in the database, not restored (saves memory and time)
 NO_RESTORE = ("data/schwab/flow/", "data/schwab/gex/")
-RESTORE_ALWAYS = ("data/schwab/gex/gex_daily.csv", "data/schwab/flow/capture_log.csv", "data/schwab/gex/spx_gex_squeezemetrics.csv")
+RESTORE_ALWAYS = ("data/schwab/gex/gex_daily.csv", "data/schwab/gex/gex_0dte.csv", "data/schwab/flow/capture_log.csv", "data/schwab/gex/spx_gex_squeezemetrics.csv")
 log = logging.getLogger("runner")
 
 

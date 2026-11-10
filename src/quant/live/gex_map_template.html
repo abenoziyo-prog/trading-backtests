@@ -60,7 +60,7 @@ h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8
 .dot{width:8px;height:8px;border-radius:50%;background:var(--good);display:inline-block;margin-right:6px}
 .dot.stale{background:var(--neg)}
 .chg li{margin:5px 0;color:var(--fg)}.chg{margin:6px 6px 10px;padding-left:18px;font-size:13.5px;max-width:70ch}
-.mv th,.mv td{padding:5px 10px}.mv td.hot{font-weight:600;color:var(--fg)}
+.mv{font-size:12px}.mv th,.mv td{padding:5px 6px}.mv td.hot{font-weight:600;color:var(--fg)}
 .mv td:first-child,.mv th:first-child{text-align:left}
 .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 .dl{font-style:normal;font-size:max(.72em,11px);font-weight:500;font-family:var(--body);white-space:nowrap;color:var(--muted)}
@@ -81,7 +81,7 @@ h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8
   <h2 id="chgh"></h2>
   <ul class="chg" id="chg"></ul>
   <div class="tw"><table class="mv" id="mv"></table></div>
-  <p style="margin-top:8px">Open interest is fixed for the day, so new positioning is read from volume: contracts traded at each strike between two snapshots. Volume does not say who bought and who sold. "New today" marks a side whose volume today already exceeds its open interest.</p>
+  <p style="margin-top:8px">Open interest is fixed for the day, so new positioning is read from volume: contracts traded at each strike between two snapshots. Volume does not say who bought and who sold. "New" marks a side whose volume today already exceeds its open interest.</p>
  </div>
 
  <h2 class="sec">Map</h2>
@@ -119,7 +119,7 @@ h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8
 <div class="tip" id="tip" hidden></div>
 <script>
 const D=/*DATA*/null;
-const M=D.M, R=D.R, B=M.basis, F=M.future.replace('/','');
+const M=D.M, R=D.R, B=M.basis, F=M.future.replace('/',''), IX=M.index||'SPX';
 const $=i=>document.getElementById(i), f=n=>n==null?'n/a':n.toLocaleString('en-US',{maximumFractionDigits:2}), f0=n=>n==null?'n/a':Math.round(n).toLocaleString('en-US'), sg=n=>n==null?'n/a':(n>0?'+':n<0?'\u2212':'')+f(Math.abs(n));
 const E=k=>k==null?null:k+B;
 const P=M.prev;
@@ -129,7 +129,7 @@ const dk=(k,scale,unit)=>P?dl(M[k],P[k],scale,unit):'';
 const store={get(k,d){try{return localStorage.getItem('gexmap.'+k)||d}catch(e){return d}},set(k,v){try{localStorage.setItem('gexmap.'+k,v)}catch(e){}}};
 const S={mode:store.get('mode','split'),win:store.get('win',M.snaps>5?'5':'1')};
 $('h1').textContent=`${F} dealer map, live`;
-$('sub').textContent=`SPX options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by the basis of ${sg(B)} points (${M.basisNote})`;
+$('sub').textContent=`${IX} options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by the basis of ${sg(B)} points (${M.basisNote})`;
 const age=()=>Math.round((Date.now()-new Date(M.asof).getTime())/1000);
 function status(){const a=age(), stale=a>Math.max(3*M.every,180);
  $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+Math.round(a/60)+' minutes old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span>${M.prevClock?'<span>brackets: change since <b>'+M.prevClock+'</b></span>':''}<span>every ${M.every}s, page reloads every ${M.refresh}s</span>`}
@@ -137,33 +137,39 @@ status();setInterval(status,1000);
 $('reg').textContent=(M.regime||'unknown')+' gamma';
 if(M.regime!=='positive')$('pill').classList.add('neg');
 $('net').innerHTML=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn'+dk('net',1e9,'bn');
+if(M.thin){const w=document.createElement('p');w.className='sub';w.innerHTML=`<b style="color:var(--dn)">Thin positioning:</b> only ${f0(M.callOi+M.putOi)} contracts of open interest in this expiry. Treat these levels as unreliable.`;$('levels').before(w)}
 $('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.spot-M.flip))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
 const firstOi=s=>{if(!s)return[null,null];const[k,v]=s.split('|')[0].split(':');return[+k,+v]}, tc=firstOi(M.topCall), tp=firstOi(M.topPut);
-const lv=[[F+' last','<i class="key"></i>',f(M.futLast)+dk('futLast'),'index equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip))+dk('flip'),'SPX '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall))+dk('callWall'),'SPX '+f0(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall))+dk('putWall'),'SPX '+f0(M.putWall)],['Basis','',sg(B),M.basisNote],['SPX quote','',f(M.indexQuote)+dk('indexQuote'),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn'+dk('cg',1e3,'bn'),'all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn'+dk('pg',1e3,'bn'),'all strikes'],['Net vanna','',sg(M.vex)+'M'+dk('vex',1,'M'),'per +1 vol point'],['Net charm','',sg(M.chx)+'M'+dk('chx',1,'M'),'per hour'],['Volume today','',f0(M.callVol+M.putVol)+(P?dl(M.callVol+M.putVol,P.callVol+P.putVol):''),f0(M.callVol)+dk('callVol')+' calls, '+f0(M.putVol)+dk('putVol')+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
+const lv=[[F+' last','<i class="key"></i>',f(M.futLast)+dk('futLast'),'index equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip))+dk('flip'),IX+' '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall))+dk('callWall'),IX+' '+f0(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall))+dk('putWall'),IX+' '+f0(M.putWall)],['Basis','',sg(B),M.basisNote],[IX+' quote','',f(M.indexQuote)+dk('indexQuote'),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn'+dk('cg',1e3,'bn'),'all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn'+dk('pg',1e3,'bn'),'all strikes'],['Net vanna','',sg(M.vex)+'M'+dk('vex',1,'M'),'per +1 vol point'],['Net charm','',sg(M.chx)+'M'+dk('chx',1,'M'),'per hour'],['Volume today','',f0(M.callVol+M.putVol)+(P?dl(M.callVol+M.putVol,P.callVol+P.putVol):''),f0(M.callVol)+dk('callVol')+' calls, '+f0(M.putVol)+dk('putVol')+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
 $('levels').innerHTML=lv.map(l=>`<div class="lv"><span>${l[1]}${l[0]}</span><b>${l[2]}</b><small>${l[3]}</small></div>`).join('');
 // what changed
 $('chgh').textContent=M.snaps<2?'First snapshot of this run: changes appear from the next one':`Most active strikes over the last ${M.win}, and level moves`;
 $('chg').innerHTML=(D.notes.length?D.notes:[M.snaps<2?'Nothing to compare yet.':'No level moved by a notable amount.']).map(s=>`<li>${s}</li>`).join('');
-const fresh=(v,oi)=>v>oi&&v>=50?'<span class="tag">new today</span>':'';
-$('mv').innerHTML=D.movers.length?'<tr><th>'+F+' level</th><th>SPX strike</th><th>Calls traded</th><th>Puts traded</th><th>Calls today / OI</th><th>Puts today / OI</th></tr>'+D.movers.map(r=>`<tr><td><i class="swatch" style="background:var(--${r.dc>=r.dp?'pos':'neg'})"></i>${f(E(r.k))}</td><td>${f0(r.k)}</td><td class="${r.dc>=r.dp?'hot':''}">${f0(r.dc)}</td><td class="${r.dp>r.dc?'hot':''}">${f0(r.dp)}</td><td>${f0(r.cv)} / ${f0(r.co)}${fresh(r.cv,r.co)}</td><td>${f0(r.pv)} / ${f0(r.po)}${fresh(r.pv,r.po)}</td></tr>`).join(''):'';
+const fresh=(v,oi)=>v>oi&&v>=50?'<span class="tag" title="volume today exceeds open interest">new</span>':'';
+$('mv').innerHTML=D.movers.length?'<tr><th>'+F+' level</th><th>'+IX+' strike</th><th>Calls traded</th><th>Puts traded</th><th>Calls today / OI</th><th>Puts today / OI</th></tr>'+D.movers.map(r=>`<tr><td><i class="swatch" style="background:var(--${r.dc>=r.dp?'pos':'neg'})"></i>${f(E(r.k))}</td><td>${f0(r.k)}</td><td class="${r.dc>=r.dp?'hot':''}">${f0(r.dc)}</td><td class="${r.dp>r.dc?'hot':''}">${f0(r.dp)}</td><td>${f0(r.cv)} / ${f0(r.co)}${fresh(r.cv,r.co)}</td><td>${f0(r.pv)} / ${f0(r.po)}${fresh(r.pv,r.po)}</td></tr>`).join(''):'';
 const vmx=R.reduce((a,r)=>Math.abs(r.vx)>Math.abs(a.vx)?r:a,R[0]||{vx:0,k:null}), cmx=R.reduce((a,r)=>Math.abs(r.ch)>Math.abs(a.ch)?r:a,R[0]||{ch:0,k:null});
 $('vtxt').innerHTML=`Total <b>${sg(M.vex)}M</b>. Under the convention, a 1 point rise in implied volatility adds that much to dealer delta, which they would hedge by ${M.vex>0?'selling':'buying'}. Largest level: <b>${f(E(vmx.k))}</b>.`;
 $('ctxt').innerHTML=`Total <b>${sg(M.chx)}M</b> per hour. Under the convention, the passing of time ${M.chx<0?'removes':'adds'} that much dealer delta each hour, which they would hedge by ${M.chx<0?'buying':'selling'}. Largest level: <b>${f(E(cmx.k))}</b>.`;
-const rows=[...R].sort((a,b)=>b.k-a.k), tip=$('tip'), kmax=rows.length?rows[0].k:0, step=rows.length>1?rows[0].k-rows[1].k:5;
+const rows=[...R].sort((a,b)=>b.k-a.k), tip=$('tip');
+const avg=rows.length>1?(rows[0].k-rows[rows.length-1].k)/(rows.length-1):5, tick=[5,10,25,50,100,250,500,1000].find(t=>t>=2.2*avg)||1000;
+const idx=new Map(rows.map((r,i)=>[r.k,i]));
+// position (in rows) of any price: exact on a strike, interpolated between two, null outside the ladder
+function pos(v){if(idx.has(v))return idx.get(v);for(let i=0;i<rows.length-1;i++)if(rows[i].k>=v&&v>=rows[i+1].k)return i+(rows[i].k-v)/(rows[i].k-rows[i+1].k);return null}
 const nice=v=>{if(!(v>0))return 1;const p=Math.pow(10,Math.floor(Math.log10(v)));return [1,1.2,1.5,2,2.5,3,4,5,6,8,10].map(m=>m*p).find(m=>m>=v)};
 function bar(x0,w,pos,yy,hh,fill,op){if(!(w>0))return'';w=Math.max(w,1);const rr=Math.min(3,w/2);
  const d=pos?`M${x0},${yy}h${w-rr}a${rr},${rr} 0 0 1 ${rr},${rr}v${hh-2*rr}a${rr},${rr} 0 0 1 ${-rr},${rr}h${-(w-rr)}z`:`M${x0},${yy}h${-(w-rr)}a${rr},${rr} 0 0 0 ${-rr},${rr}v${hh-2*rr}a${rr},${rr} 0 0 0 ${rr},${rr}h${w-rr}z`;
  return `<path d="${d}" fill="var(--${fill})" opacity="${op}"/>`}
 // kind: gex | vol | vx | ch ; main = labels in the right margin
 function ladder(o){const box=$(o.el);if(!rows.length){box.textContent='No strikes with data near the price.';return}
- const W=Math.max(280,Math.min(o.main?560:420,box.clientWidth||520)), nar=W<460, rh=o.main?12:11, mt=14, mb=26, ml=nar?44:52, mr=o.main?(nar?118:140):14, H=mt+mb+rows.length*rh;
- const y=k=>mt+(kmax-k)/step*rh+rh/2, two=(o.kind==='gex'&&S.mode==='split')||o.kind==='vol';
+ const W=Math.max(280,Math.min(o.main?560:420,box.clientWidth||520)), nar=W<460, rh=o.main?12:11, mt=14, mb=26, ml=(nar?44:52)+(rows[0].k+B>=10000?8:0), mr=o.main?(nar?118:140):14, H=mt+mb+rows.length*rh;
+ if(o.kind==='vol'&&!rows.some(r=>r['dc'+S.win]+r['dp'+S.win]>0)){box.innerHTML='<p>No contracts traded near the price in this window.</p>';return}
+ const y=k=>{const p=pos(k);return p==null?-999:mt+p*rh+rh/2}, two=(o.kind==='gex'&&S.mode==='split')||o.kind==='vol';
  const pr=r=>o.kind==='vol'?[r['dc'+S.win],-r['dp'+S.win]]:[r.cg,r.pg];
  const val=r=>o.kind==='gex'?r.net:o.kind==='vx'?r.vx:r.ch;
  const vmax=nice(Math.max(...rows.map(r=>two?Math.max(pr(r)[0],-pr(r)[1]):Math.abs(val(r))))), x0=ml+(W-ml-mr)/2, xs=(W-ml-mr)/2/vmax, x=v=>x0+v*xs;
  let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${o.aria}">`, lab='';
  for(let v=-vmax;v<=vmax+1e-9;v+=vmax/2){s+=`<line x1="${x(v)}" x2="${x(v)}" y1="${mt}" y2="${H-mb}" stroke="var(--grid)" stroke-width="1"/><text x="${x(v)}" y="${H-8}" text-anchor="middle">${o.kind==='vol'?f(Math.abs(v)):(v>0?'+':'')+f(v)}</text>`}
- rows.forEach(r=>{if(r.k%25===0)s+=`<text x="${ml-8}" y="${y(r.k)+4}" text-anchor="end">${f0(E(r.k))}</text><line x1="${ml-4}" x2="${ml}" y1="${y(r.k)}" y2="${y(r.k)}" stroke="var(--muted)"/>`});
+ rows.forEach(r=>{if(r.k%tick===0)s+=`<text x="${ml-8}" y="${y(r.k)+4}" text-anchor="end">${f0(E(r.k))}</text><line x1="${ml-4}" x2="${ml}" y1="${y(r.k)}" y2="${y(r.k)}" stroke="var(--muted)"/>`});
  const refs=[{v:M.spot,t:F+' last '+f(M.futLast),c:'var(--line)',d:''}];
  if(M.flip!=null)refs.push({v:M.flip,t:(nar?'Flip ':'Gamma flip ')+f(E(M.flip)),c:'var(--flip)',d:'6 4'});
  if(o.main){if(M.callWall!=null)refs.push({v:M.callWall+.01,t:'Call wall '+f0(E(M.callWall)),w:1});if(M.putWall!=null)refs.push({v:M.putWall,t:'Put wall '+f0(E(M.putWall)),w:1})}
@@ -178,7 +184,7 @@ function ladder(o){const box=$(o.el);if(!rows.length){box.textContent='No strike
   s+=`<rect class="hit" data-i="${i}" x="${ml}" y="${y(r.k)-rh/2}" width="${W-ml-mr}" height="${rh}" fill="transparent"/>`});
  s+=`<line x1="${x0}" x2="${x0}" y1="${mt}" y2="${H-mb}" stroke="var(--muted)" stroke-width="1"/>`+lab+'</svg>';box.innerHTML=s;
  box.querySelectorAll('.hit').forEach(h=>{const r=rows[+h.dataset.i];
-  const show=e=>{tip.hidden=false;tip.innerHTML=`<b>${F} ${f(E(r.k))}</b> \u00b7 SPX ${f0(r.k)}<br>`+(o.kind==='gex'?`Net ${sg(r.net)}M<br>Calls ${sg(r.cg)}M \u00b7 OI ${f0(r.co)}<br>Puts ${sg(r.pg)}M \u00b7 OI ${f0(r.po)}`:o.kind==='vol'?`Calls: +${f0(r.dc1)} last, +${f0(r.dc5)} in 5 min, +${f0(r.dc0)} since start<br>Puts: +${f0(r.dp1)} last, +${f0(r.dp5)} in 5 min, +${f0(r.dp0)} since start<br>Today ${f0(r.cv)} calls \u00b7 ${f0(r.pv)} puts<br>OI ${f0(r.co)} calls \u00b7 ${f0(r.po)} puts`:o.kind==='vx'?`Vanna ${sg(r.vx)}M per vol point`:`Charm ${sg(r.ch)}M per hour`);tip.style.left=Math.max(4,Math.min(e.clientX+14,innerWidth-236))+'px';tip.style.top=(e.clientY+14)+'px'};
+  const show=e=>{tip.hidden=false;tip.innerHTML=`<b>${F} ${f(E(r.k))}</b> \u00b7 ${IX} ${f0(r.k)}<br>`+(o.kind==='gex'?`Net ${sg(r.net)}M<br>Calls ${sg(r.cg)}M \u00b7 OI ${f0(r.co)}<br>Puts ${sg(r.pg)}M \u00b7 OI ${f0(r.po)}`:o.kind==='vol'?`Calls: +${f0(r.dc1)} last, +${f0(r.dc5)} in 5 min, +${f0(r.dc0)} since start<br>Puts: +${f0(r.dp1)} last, +${f0(r.dp5)} in 5 min, +${f0(r.dp0)} since start<br>Today ${f0(r.cv)} calls \u00b7 ${f0(r.pv)} puts<br>OI ${f0(r.co)} calls \u00b7 ${f0(r.po)} puts`:o.kind==='vx'?`Vanna ${sg(r.vx)}M per vol point`:`Charm ${sg(r.ch)}M per hour`);tip.style.left=Math.max(4,Math.min(e.clientX+14,innerWidth-236))+'px';tip.style.top=(e.clientY+14)+'px'};
   h.addEventListener('pointermove',show);h.addEventListener('pointerdown',show);h.addEventListener('pointerleave',()=>tip.hidden=true)})}
 function history(){const H0=D.H, box=$('hist');$('hh').textContent=`${F} price and the levels, ${H0.length} snapshot${H0.length===1?'':'s'} since ${M.first} New York`;
  if(H0.length<2){box.innerHTML='<p>This chart needs at least two snapshots.</p>';return}
@@ -202,11 +208,11 @@ function draw(){
  ladder({el:'vchart',kind:'vx',aria:'Vanna exposure by level'});ladder({el:'cchart',kind:'ch',aria:'Charm exposure by level'});history()}
 document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{S[b.dataset.g]=b.dataset.v;store.set(b.dataset.g,b.dataset.v);draw()}));
 draw();let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(draw,120)});
-$('notes').innerHTML=[`Every level is the SPX level plus the basis of ${sg(B)} points (${M.basisNote}). The basis drifts by a point or two in a day, so read the levels as zones a few points wide.`,
+$('notes').innerHTML=[`Every level is the ${IX} level plus the basis of ${sg(B)} points (${M.basisNote}). The basis drifts by a point or two in a day, so read the levels as zones a few points wide.`,
  `Gamma, vanna and charm are computed at the index price implied by ${F} (last price minus the basis), so the map follows the future in real time, also before the cash open.`,
  'Signs assume dealers are long calls and short puts. That is a convention, not a measurement, and it is least reliable for same-day options.',
  'Open interest is the overnight figure and does not change during the day. Volume shows where trading happens, not whether dealers bought or sold.',
- 'Ladders show strikes within 200 index points of the price. Totals in the tiles use every strike.'].map(s=>`<li>${s}</li>`).join('');
-$('tbl').innerHTML='<tr><th>'+F+' level</th><th>SPX strike</th><th>Net GEX ($M)</th><th>Call GEX</th><th>Put GEX</th><th>Vanna</th><th>Charm</th><th>Call OI</th><th>Put OI</th><th>Call vol</th><th>Put vol</th><th>Calls 5m</th><th>Puts 5m</th></tr>'+rows.map(r=>`<tr><td>${f(E(r.k))}</td><td>${f0(r.k)}</td><td>${f(r.net)}</td><td>${f(r.cg)}</td><td>${f(r.pg)}</td><td>${f(r.vx)}</td><td>${f(r.ch)}</td><td>${f0(r.co)}</td><td>${f0(r.po)}</td><td>${f0(r.cv)}</td><td>${f0(r.pv)}</td><td>${f0(r.dc5)}</td><td>${f0(r.dp5)}</td></tr>`).join('');
+ 'Ladders show the strikes nearest the price (up to 90, within about 2.65% of it). Totals in the tiles use every strike.'].map(s=>`<li>${s}</li>`).join('');
+$('tbl').innerHTML='<tr><th>'+F+' level</th><th>'+IX+' strike</th><th>Net GEX ($M)</th><th>Call GEX</th><th>Put GEX</th><th>Vanna</th><th>Charm</th><th>Call OI</th><th>Put OI</th><th>Call vol</th><th>Put vol</th><th>Calls 5m</th><th>Puts 5m</th></tr>'+rows.map(r=>`<tr><td>${f(E(r.k))}</td><td>${f0(r.k)}</td><td>${f(r.net)}</td><td>${f(r.cg)}</td><td>${f(r.pg)}</td><td>${f(r.vx)}</td><td>${f(r.ch)}</td><td>${f0(r.co)}</td><td>${f0(r.po)}</td><td>${f0(r.cv)}</td><td>${f0(r.pv)}</td><td>${f0(r.dc5)}</td><td>${f0(r.dp5)}</td></tr>`).join('');
 </script>
 </body></html>

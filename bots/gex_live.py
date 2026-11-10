@@ -1,23 +1,24 @@
-"""Live ES dealer map: fetch the SPX 0DTE chain every minute and rewrite one self-refreshing HTML page.
+"""Live dealer maps: fetch the SPX and NDX 0DTE chains every minute and rewrite self-refreshing HTML pages.
 
-    python bots/gex_live.py                 # every 60 seconds until 16:15 New York or Ctrl-C
-    python bots/gex_live.py --every 30 --open
+    python bots/gex_live.py --open          # ES (from SPX) and NQ (from NDX), every 60 seconds until 16:15 New York
+    python bots/gex_live.py --symbols '$SPX' --every 30
 
 Read-only, like bots/gex_snapshot.py: the only Schwab calls are the option chain and the future's price history
-(ReadOnlyClient.MARKET_DATA). Three requests per cycle: calls, puts, and the last minutes of /ES.
+(ReadOnlyClient.MARKET_DATA). Three requests per symbol and cycle: calls, puts, and the last minutes of the future.
 
-Each cycle:
+Each cycle, for each symbol ($SPX is read on /ES, $NDX on /NQ):
   1. the nearest-expiry $SPX chain with every strike (bots/gex_snapshot.fetch_0dte), saved under
      data/schwab/gex/SPX_IDX_0DTE/live/<date>/
   2. the latest /ES price; the index price used for the Greeks is that price minus the basis, so the map follows
      the future also while the cash index is closed
-  3. data/schwab/gex/live/es_map.html is rewritten (quant.live.gex_map): levels on /ES, gamma / vanna / charm per
+  3. data/schwab/gex/live/es_map.html (nq_map.html) is rewritten (quant.live.gex_map): levels on /ES, gamma / vanna / charm per
      strike, and what changed against the previous snapshot, five minutes ago and the start of the run
   4. one row is appended to data/schwab/gex/gex_live.csv
 
 The basis (future - index) is fixed when the run starts: outside cash hours it is taken at the last cash close (the
 future's 15:59 bar minus the chain's index price, which is that close); inside cash hours from the two live prices at
-the start. Start it before the open when possible. Open the page in a browser: it reloads itself.
+the start. Start it before the open when possible. data/schwab/gex/live/live_map.html shows the maps side by side,
+ES on the left and NQ on the right; open it in a browser, each map reloads itself.
 """
 from __future__ import annotations
 
@@ -37,11 +38,11 @@ sys.path.insert(0, str(ROOT / "bots"))
 
 import gex_snapshot as snap  # noqa: E402
 from quant.live.gex import FUTURE, futures_levels, strike_table, zero_dte  # noqa: E402
-from quant.live.gex_map import Session, write  # noqa: E402
+from quant.live.gex_map import Session, page_name, write, write_frame  # noqa: E402
 from quant.live.schwab_feed import ReadOnlyClient, history_bars, make_client  # noqa: E402
 
 NY = snap.NY
-MIN_EVERY = 20  # seconds: three requests per cycle stay far below the request limit even at this pace
+MIN_EVERY = 20  # seconds: six requests per cycle (two symbols) stay far below the request limit even at this pace
 
 
 def last_price(client: ReadOnlyClient, future: str, now: datetime) -> tuple[float, datetime] | None:
@@ -81,7 +82,7 @@ def cycle(client: ReadOnlyClient, ses: Session, symbol: str, now: datetime, stat
     spot = state["fut"] - state["basis"]
     z = zero_dte(c, spot, now, symbol)
     data = ses.add(now, z, strike_table(c, spot, now), state["fut"], state["basis"], state["note"], index_quote, fetch_s)
-    write(out / "live" / "es_map.html", data)
+    write(out / "live" / page_name(ses.future), data)
     m = data["M"]
     b = state["basis"]
     row = dict(asof=m["asof"], symbol=symbol, future=ses.future, fut_last=m["futLast"], basis=b, spot_used=m["spot"],
@@ -105,7 +106,7 @@ def line(data: dict) -> str:
 def main() -> None:
     snap.load_env()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--symbol", default="$SPX", choices=sorted(FUTURE))
+    ap.add_argument("--symbols", nargs="+", default=["$SPX", "$NDX"], choices=sorted(FUTURE), help="shown left to right")
     ap.add_argument("--every", type=int, default=60, help=f"seconds between snapshots (at least {MIN_EVERY})")
     ap.add_argument("--until", default="16:15", help="New York time to stop at (HH:MM)")
     ap.add_argument("--open", action="store_true", help="open the page in the browser after the first snapshot")
@@ -118,9 +119,12 @@ def main() -> None:
         sys.exit(f"no Schwab token at {os.environ['SCHWAB_TOKEN_PATH']}: run python bots/schwab_login.py first")
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
                          extra=ReadOnlyClient.MARKET_DATA)
-    ses, state, page = Session(FUTURE[a.symbol], every), {}, snap.OUT / "live" / "es_map.html"
+    symbols = list(dict.fromkeys(a.symbols))
+    runs = {sym: (Session(FUTURE[sym], every, index=sym.strip("$")), {}) for sym in symbols}
+    page = snap.OUT / "live" / "live_map.html"
+    write_frame(page, [FUTURE[sym] for sym in symbols])
     hh, mm = (int(x) for x in a.until.split(":"))
-    print(f"Live map: {page}\nOpen it in a browser (it reloads itself). Ctrl-C stops.\n", flush=True)
+    print(f"Live maps: {page}\nOpen it in a browser (the maps reload themselves). Ctrl-C stops.\n", flush=True)
     opened = False
     try:
         while True:
@@ -129,13 +133,14 @@ def main() -> None:
                 print(f"{a.until} New York reached: stopping.")
                 break
             started = time.monotonic()
-            try:
-                print(line(cycle(client, ses, a.symbol, now, state, snap.OUT)), flush=True)
-                if a.open and not opened:
-                    webbrowser.open(page.as_uri())
-                    opened = True
-            except Exception as exc:  # one bad cycle (network, an empty answer) must not end the run
-                print(f"{now:%H:%M:%S}  snapshot failed: {repr(exc)[:200]}", flush=True)
+            for sym, (ses, state) in runs.items():
+                try:
+                    print(line(cycle(client, ses, sym, now, state, snap.OUT)), flush=True)
+                except Exception as exc:  # one bad cycle (network, an empty answer) must not end the run or the other symbol
+                    print(f"{now:%H:%M:%S}  {sym} snapshot failed: {repr(exc)[:200]}", flush=True)
+            if a.open and not opened:
+                webbrowser.open(page.as_uri())
+                opened = True
             time.sleep(max(1.0, every - (time.monotonic() - started)))
     except KeyboardInterrupt:
         print("\nStopped.")

@@ -14,7 +14,9 @@ from pathlib import Path
 import pandas as pd
 
 TEMPLATE = Path(__file__).with_name("gex_map_template.html")
-HALF_WIDTH = 200.0   # index points each side of spot shown on the strike ladders
+HALF_WIDTH = 0.0265  # share of the index price each side of it shown on the strike ladders (200 points on SPX)
+MAX_ROWS = 90        # strikes on a ladder: the nearest ones with open interest or volume when the window holds more
+THIN_OI = 20000      # contracts of open interest below which the page warns that the levels are unreliable
 TOP = 8              # strikes listed in the "what changed" table
 # page values shown with their change against the previous fetch
 DELTA_KEYS = ("futLast", "spot", "indexQuote", "flip", "callWall", "putWall", "net", "cg", "pg", "vex", "chx", "callVol", "putVol")
@@ -25,8 +27,8 @@ def _f(x, nd=2):
 
 
 class Session:
-    def __init__(self, future: str = "/ES", every_s: int = 60, refresh_s: int = 20):
-        self.future, self.every_s, self.refresh_s = future, every_s, refresh_s
+    def __init__(self, future: str = "/ES", every_s: int = 60, refresh_s: int = 20, index: str = "SPX"):
+        self.future, self.every_s, self.refresh_s, self.index = future, every_s, refresh_s, index
         self.snaps: list[dict] = []   # dict(t, z, vol (DataFrame call_volume/put_volume), fut, basis)
         self.last_m: dict | None = None   # the previous snapshot's page values, for the per-fetch deltas
 
@@ -53,7 +55,11 @@ class Session:
         for tag, old in (("1", prev), ("5", five), ("0", first if len(self.snaps) > 1 else None)):
             t["dc" + tag], t["dp" + tag] = dv(old, "call_volume"), dv(old, "put_volume")
         spot = float(z["spot"])
-        near = t[(t.index >= spot - HALF_WIDTH) & (t.index <= spot + HALF_WIDTH)]
+        near = t[(t.index >= spot * (1 - HALF_WIDTH)) & (t.index <= spot * (1 + HALF_WIDTH))]
+        if len(near) > MAX_ROWS:   # a dense chain (NDX lists a strike every 5 points): keep the nearest live strikes
+            live = near[(near.call_oi + near.put_oi + near.call_volume + near.put_volume) > 0]
+            keep = (live.index.to_series() - spot).abs().sort_values(kind="stable").index[:MAX_ROWS]
+            near = near.loc[sorted(keep)]
         rows = [dict(k=float(k), cg=_f(r.call_gex / 1e6, 1), pg=_f(r.put_gex / 1e6, 1), net=_f((r.call_gex + r.put_gex) / 1e6, 1),
                      vx=_f(r.vanna / 1e6), ch=_f(r.charm / 1e6), co=int(r.call_oi), po=int(r.put_oi), cv=int(r.call_volume),
                      pv=int(r.put_volume), dc1=int(r.dc1), dp1=int(r.dp1), dc5=int(r.dc5), dp5=int(r.dp5), dc0=int(r.dc0), dp0=int(r.dp0))
@@ -69,7 +75,8 @@ class Session:
                      pw=_f(None if s["z"].get("put_wall") is None else s["z"]["put_wall"] + s["basis"])) for s in self.snaps]
         m = dict(asof=now.isoformat(timespec="seconds"), clock=now.strftime("%H:%M:%S"), day=now.strftime("%a %d %b %Y"),
                  expiry=z.get("expiry"), spot=_f(spot), indexQuote=_f(index_quote), basis=_f(basis), basisNote=basis_note,
-                 future=self.future, futLast=_f(fut_last), flip=_f(z.get("gamma_flip")), callWall=_f(z.get("call_wall")),
+                 future=self.future, index=self.index, thin=bool((z.get("call_oi") or 0) + (z.get("put_oi") or 0) < THIN_OI),
+                 futLast=_f(fut_last), flip=_f(z.get("gamma_flip")), callWall=_f(z.get("call_wall")),
                  putWall=_f(z.get("put_wall")), net=_f(z.get("net_gex"), 0), regime=z.get("regime"),
                  callOi=int(z.get("call_oi") or 0), putOi=int(z.get("put_oi") or 0),
                  callVol=int(table.call_volume.sum()), putVol=int(table.put_volume.sum()),
@@ -127,3 +134,26 @@ def write(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(render(data), encoding="utf-8")
     tmp.replace(path)
+
+
+def page_name(future: str) -> str:
+    """File name of one future's page: /ES -> es_map.html."""
+    return future.strip("/").lower() + "_map.html"
+
+
+def write_frame(path: Path, futures: list[str]) -> None:
+    """One page that shows each future's map side by side (the first on the left); each map reloads itself."""
+    panes = "".join(f'<iframe src="{page_name(f)}" title="{f.strip("/")} dealer map"></iframe>' for f in futures)
+    title = " and ".join(f.strip("/") for f in futures)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} dealer maps (live)</title>
+<style>
+html,body{{margin:0;height:100%;background:#f6f6f4}}
+@media (prefers-color-scheme:dark){{html,body{{background:#111110}}}}
+.panes{{display:flex;height:100vh;gap:1px;background:#8a898455}}
+iframe{{flex:1 1 0;min-width:0;height:100%;border:0;background:transparent}}
+@media (max-width:900px){{.panes{{flex-direction:column;height:auto}}iframe{{height:92vh;flex:none}}}}
+</style></head><body><div class="panes">{panes}</div></body></html>
+""", encoding="utf-8")

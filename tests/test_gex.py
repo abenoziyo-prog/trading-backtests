@@ -407,13 +407,43 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     assert (tmp_path / "live" / "es_map.html").exists() and len(pd.read_csv(tmp_path / "gex_live.csv")) == 2
     assert len(list((tmp_path / "SPX_IDX_0DTE" / "live" / "2026-10-27").glob("*.parquet"))) == 2
     assert "ES 7,770.00" in live.line(d) or "/ES 7,770.00" in live.line(d)
-    # NDX goes to its own page, read on /NQ, and the frame shows the two side by side
+    # a third snapshot in the same minute: fetched through a thread pool, no new snapshot file, one more CSV line
+    from concurrent.futures import ThreadPoolExecutor
+    calls.clear()
+    t3 = now + timedelta(minutes=1, seconds=3)
+    with ThreadPoolExecutor(2) as pool:
+        chain3 = live.fetch(client, "$SPX", t3, state, tmp_path, pool)
+    d3 = live.cycle(client, ses, "$SPX", t3, state, tmp_path, chain3, (7771.0, t3), 0.4)
+    assert calls == ["chain", "chain"] and d3["M"]["futLast"] == 7771.0 and d3["M"]["snaps"] == 3 and d3["M"]["fetchS"] == 0.4
+    assert len(list((tmp_path / "SPX_IDX_0DTE" / "live" / "2026-10-27").glob("*.parquet"))) == 2
+    assert len(pd.read_csv(tmp_path / "gex_live.csv")) == 3
+    # the page does not reload: it polls the data file written next to it
+    page = (tmp_path / "live" / "es_map.html").read_text(encoding="utf-8")
+    js = (tmp_path / "live" / "es_map.data.js").read_text(encoding="utf-8")
+    assert 'http-equiv="refresh"' not in page and "es_map.data.js" in page and "__DATA_JS__" not in page
+    assert js.startswith("__gex({") and json.loads(js[6:-2])["M"]["snaps"] == 3
+    # only ES sources; the pace comes from the request budget: 2 requests per symbol and 1 for the future
+    assert sorted(live.SOURCES) == ["$SPX", "SPY"] and set(live.SOURCES.values()) == {"/ES"}
+    assert round(live.interval(2, 110), 2) == 2.73 and round(live.interval(1, 110), 2) == 1.64
+    assert live.interval(2, 500) == 2.5 and live.interval(2, 110, every=10) == 10
     from quant.live.gex_map import write_frame
-    nq = live.cycle(client, live.Session("/NQ", 60, index="NDX"), "$NDX", now, {}, tmp_path)
-    assert nq["M"]["index"] == "NDX" and nq["M"]["thin"] is True and (tmp_path / "live" / "nq_map.html").exists()
-    write_frame(tmp_path / "live" / "live_map.html", [("/ES", "SPX"), ("/NQ", "NDX"), ("/ES", "SPY"), ("/NQ", "QQQ")])
+    write_frame(tmp_path / "live" / "live_map.html", [("/ES", "SPX"), ("/ES", "SPY")])
     frame = (tmp_path / "live" / "live_map.html").read_text(encoding="utf-8")
-    assert frame.index("es_map.html") < frame.index("nq_map.html") < frame.index("es_spy_map.html") < frame.index("nq_qqq_map.html")
+    assert frame.index("es_map.html") < frame.index("es_spy_map.html")
+
+
+def test_live_session_keeps_a_long_fast_run_small():
+    from quant.live.gex import strike_table, zero_dte
+    from quant.live.gex_map import HIST, Session
+    import pandas as pd
+    c = pd.concat([contracts(zero_chain("CALL")), contracts(zero_chain("PUT"))], ignore_index=True)
+    ses, t0 = Session("/ES", 3), datetime(2026, 10, 27, 10, 0, tzinfo=NY)
+    z, table = zero_dte(c, 7722.0, t0, "$SPX"), strike_table(c, 7722.0, t0)
+    for i in range(1200):   # an hour at one snapshot every 3 seconds
+        t = t0 + timedelta(seconds=3 * i)
+        d = ses.add(t, z, table, 7760.0 + i * 0.01, 38.0, "x")
+    assert d["M"]["snaps"] == 1200 and len(ses.snaps) <= 1 + 420 // 3 + 1 and ses.snaps[0]["t"] == t0
+    assert len(d["H"]) <= HIST and d["H"][-1]["t"] == "10:59:57" and d["M"]["win"] == "5 minutes"
 
 
 def test_live_cycle_moves_etf_strikes_onto_the_future_by_the_price_ratio(tmp_path):

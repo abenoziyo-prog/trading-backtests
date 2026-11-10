@@ -75,6 +75,16 @@ def gex_at(c: pd.DataFrame, spot: float, t: np.ndarray) -> np.ndarray:
     return sign * g * c.open_interest.to_numpy() * c.multiplier.to_numpy() * spot ** 2 * 0.01
 
 
+def gex_profile(c: pd.DataFrame, grid: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Net GEX of `c` at every price of `grid` in one array operation (the sum of gex_at at each of them)."""
+    k, sig = c.strike.to_numpy(), c.iv.to_numpy() / 100.0
+    sd = sig * np.sqrt(t)
+    w = np.where(c.put_call.to_numpy() == "CALL", 1.0, -1.0) * c.open_interest.to_numpy() * c.multiplier.to_numpy()
+    s = grid[:, None]
+    d1 = (np.log(s / k) + 0.5 * sd ** 2) / sd
+    return (np.exp(-0.5 * d1 ** 2) / math.sqrt(2 * math.pi) / (s * sd) * w).sum(axis=1) * grid ** 2 * 0.01
+
+
 def summary(c: pd.DataFrame, spot: float, asof: datetime, symbol: str) -> dict:
     num = [k for k in COLS if k not in ("put_call", "expiry")]
     c = c.astype({k: float for k in num if k in c})
@@ -169,7 +179,7 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
     by = pd.DataFrame(dict(strike=g_c.strike, side=g_c.put_call, gex=g)).groupby(["strike", "side"]).gex.sum().unstack(fill_value=0.0)
     calls, puts = by.get("CALL", pd.Series(dtype=float)), by.get("PUT", pd.Series(dtype=float))
     grid = spot * np.linspace(0.95, 1.05, 201)            # one expiry: its gamma lives close to spot
-    prof = np.array([gex_at(g_c, s, t).sum() for s in grid])
+    prof = gex_profile(g_c, grid, t)
     cross = np.flatnonzero(np.diff(np.sign(prof)) != 0)
     flip = np.nan
     if len(cross):

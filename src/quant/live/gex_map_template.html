@@ -1,6 +1,5 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="__REFRESH__">
 <title>ES Dealer Map (live)</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
 <style>
@@ -118,7 +117,10 @@ h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8
 </div>
 <div class="tip" id="tip" hidden></div>
 <script>
-const D=/*DATA*/null;
+// The page is drawn by paint(data). The loop rewrites __DATA_JS__ (a call to __gex with the new data) at every fetch
+// and the page loads that file again every __POLL__ ms, so the numbers change in place without a page reload.
+let tick1=null, seen=null, rt=null;
+function paint(D){
 const M=D.M, R=D.R, B=M.basis, A=M.ratio||1, ETF=A!==1, F=M.future.replace('/',''), IX=M.index||'SPX';
 const $=i=>document.getElementById(i), f=n=>n==null?'n/a':n.toLocaleString('en-US',{maximumFractionDigits:2}), f0=n=>n==null?'n/a':Math.round(n).toLocaleString('en-US'), sg=n=>n==null?'n/a':(n>0?'+':n<0?'\u2212':'')+f(Math.abs(n));
 const MAP=ETF?`the price ratio ${A.toFixed(4)} (${F} \u00f7 ${IX}, ${M.basisNote})`:`the basis of ${sg(B)} points (${M.basisNote})`;
@@ -132,14 +134,15 @@ const S={mode:store.get('mode','split'),win:store.get('win',M.snaps>5?'5':'1')};
 $('h1').textContent=`${F} dealer map from ${IX}, live`;
 document.title=`${F} from ${IX} (live)`;
 $('sub').textContent=`${IX} options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by ${MAP}`;
-const age=()=>Math.round((Date.now()-new Date(M.asof).getTime())/1000);
-function status(){const a=age(), stale=a>Math.max(3*M.every,180);
- $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+Math.round(a/60)+' minutes old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span>${M.prevClock?'<span>brackets: change since <b>'+M.prevClock+'</b></span>':''}<span>every ${M.every}s, page reloads every ${M.refresh}s</span>`}
-status();setInterval(status,1000);
+const age=()=>Math.max(0,Math.round((Date.now()-new Date(M.asof).getTime())/1000));
+function status(){const a=age(), stale=a>Math.max(5*M.every,20);
+ $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+(a<120?a+' seconds':Math.round(a/60)+' minutes')+' old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span>${M.prevClock?'<span>brackets: change since <b>'+M.prevClock+'</b></span>':''}<span>fetch every <b>${M.every}s</b>, page updates in place</span>`}
+status();clearInterval(tick1);tick1=setInterval(status,1000);
 $('reg').textContent=(M.regime||'unknown')+' gamma';
-if(M.regime!=='positive')$('pill').classList.add('neg');
+$('pill').classList.toggle('neg',M.regime!=='positive');
 $('net').innerHTML=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn'+dk('net',1e9,'bn');
-if(M.thin){const w=document.createElement('p');w.className='sub';w.innerHTML=`<b style="color:var(--dn)">Thin positioning:</b> only ${f0(M.callOi+M.putOi)} contracts of open interest in this expiry. Treat these levels as unreliable.`;$('levels').before(w)}
+{const o=$('thin');if(o)o.remove()}
+if(M.thin){const w=document.createElement('p');w.id='thin';w.className='sub';w.innerHTML=`<b style="color:var(--dn)">Thin positioning:</b> only ${f0(M.callOi+M.putOi)} contracts of open interest in this expiry. Treat these levels as unreliable.`;$('levels').before(w)}
 $('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.futLast-E(M.flip)))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
 const firstOi=s=>{if(!s)return[null,null];const[k,v]=s.split('|')[0].split(':');return[+k,+v]}, tc=firstOi(M.topCall), tp=firstOi(M.topPut);
 const lv=[[F+' last','<i class="key"></i>',f(M.futLast)+dk('futLast'),IX+' equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip))+(P?dl(E(M.flip),E(P.flip)):''),IX+' '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall))+(P?dl(E(M.callWall),E(P.callWall)):''),IX+' '+f(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall))+(P?dl(E(M.putWall),E(P.putWall)):''),IX+' '+f(M.putWall)],(ETF?['Ratio','',A.toFixed(4),F+' \u00f7 '+IX+', '+M.basisNote]:['Basis','',sg(B),M.basisNote]),[IX+' quote','',f(M.indexQuote)+dk('indexQuote'),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn'+dk('cg',1e3,'bn'),'all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn'+dk('pg',1e3,'bn'),'all strikes'],['Net vanna','',sg(M.vex)+'M'+dk('vex',1,'M'),'per +1 vol point'],['Net charm','',sg(M.chx)+'M'+dk('chx',1,'M'),'per hour'],['Volume today','',f0(M.callVol+M.putVol)+(P?dl(M.callVol+M.putVol,P.callVol+P.putVol):''),f0(M.callVol)+dk('callVol')+' calls, '+f0(M.putVol)+dk('putVol')+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
@@ -208,13 +211,17 @@ function draw(){
  $('lg1').innerHTML=(S.mode==='split'?'<span><i class="key box"></i>Call gamma</span><span><i class="key box neg"></i>Put gamma</span><span><i class="key net"></i>Net</span>':'<span><i class="key box"></i>Net positive</span><span><i class="key box neg"></i>Net negative</span>')+'<span><i class="key"></i>Last</span><span><i class="key flip"></i>Gamma flip</span>';
  ladder({el:'chart',kind:'gex',main:true,aria:'Gamma exposure by level'});ladder({el:'vol',kind:'vol',main:true,aria:'New volume by level'});
  ladder({el:'vchart',kind:'vx',aria:'Vanna exposure by level'});ladder({el:'cchart',kind:'ch',aria:'Charm exposure by level'});history()}
-document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{S[b.dataset.g]=b.dataset.v;store.set(b.dataset.g,b.dataset.v);draw()}));
-draw();let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(draw,120)});
+document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{S[b.dataset.g]=b.dataset.v;store.set(b.dataset.g,b.dataset.v);draw()});
+draw();onresize=()=>{clearTimeout(rt);rt=setTimeout(draw,120)};
 $('notes').innerHTML=[(ETF?`Every level is the ${IX} strike times ${MAP}. One ${IX} dollar is about ${f(A)} ${F} points, so read the levels as zones a few points wide.`:`Every level is the ${IX} level plus ${MAP}. The basis drifts by a point or two in a day, so read the levels as zones a few points wide.`),
  `Gamma, vanna and charm are computed at the index price implied by ${F} (last price mapped back to ${IX}), so the map follows the future in real time, also before the cash open.`,
  'Signs assume dealers are long calls and short puts. That is a convention, not a measurement, and it is least reliable for same-day options.',
  'Open interest is the overnight figure and does not change during the day. Volume shows where trading happens, not whether dealers bought or sold.',
  'Ladders show the strikes nearest the price (up to 90, within about 2.65% of it). Totals in the tiles use every strike.'].map(s=>`<li>${s}</li>`).join('');
 $('tbl').innerHTML='<tr><th>'+F+' level</th><th>'+IX+' strike</th><th>Net GEX ($M)</th><th>Call GEX</th><th>Put GEX</th><th>Vanna</th><th>Charm</th><th>Call OI</th><th>Put OI</th><th>Call vol</th><th>Put vol</th><th>Calls 5m</th><th>Puts 5m</th></tr>'+rows.map(r=>`<tr><td>${f(E(r.k))}</td><td>${f0(r.k)}</td><td>${f(r.net)}</td><td>${f(r.cg)}</td><td>${f(r.pg)}</td><td>${f(r.vx)}</td><td>${f(r.ch)}</td><td>${f0(r.co)}</td><td>${f0(r.po)}</td><td>${f0(r.cv)}</td><td>${f0(r.pv)}</td><td>${f0(r.dc5)}</td><td>${f0(r.dp5)}</td></tr>`).join('');
+}
+window.__gex=D=>{const id=D.M.asof+'/'+D.M.snaps;if(id===seen)return;seen=id;document.getElementById('tip').hidden=true;paint(D)};
+__gex(/*DATA*/null);
+setInterval(()=>{const s=document.createElement('script');s.src='__DATA_JS__?t='+Date.now();s.onload=s.onerror=()=>s.remove();document.head.appendChild(s)},__POLL__);
 </script>
 </body></html>

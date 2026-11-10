@@ -89,27 +89,35 @@ Schwab's login expires after 7 days. When a run fails with an authorization erro
 
 ## Live map during the session
 
-`bots/gex_live.py` repeats the SPX and NDX 0DTE fetch every minute and rewrites pages that reload themselves in the
-browser:
+`bots/gex_live.py` repeats the SPX, NDX, SPY and QQQ 0DTE fetch every minute and rewrites pages that reload themselves
+in the browser:
 
 ```bash
 cd ~/trading-backtests && source .venv/bin/activate
-python bots/gex_live.py --open                   # ES and NQ, every 60 seconds until 16:15 New York; Ctrl-C stops
+python bots/gex_live.py --open                   # all four, every 60 seconds until 16:15 New York; Ctrl-C stops
 python bots/gex_live.py --every 30               # faster; 20 seconds is the floor
-python bots/gex_live.py --symbols '$SPX'         # ES only
+python bots/gex_live.py --symbols '$SPX' '$NDX'  # the two indexes only
+python bots/gex_live.py --symbols '$SPX' SPY     # ES only, from both sources
 ```
 
-Open `data/schwab/gex/live/live_map.html`: ES (from SPX) on the left, NQ (from NDX) on the right. Each side is its
-own page (`es_map.html`, `nq_map.html`) and can be opened alone. NDX same-day options carry very little open
-interest; the NQ side says so when it is below 20,000 contracts, and its levels are then weak. Each map shows the flip and the walls on `/ES`, gamma, vanna and charm per
-level, and a "What changed" block: the strikes with the most contracts traded since the last snapshot, over five
-minutes and since the start, plus any move of the walls, the flip, the regime or net gamma. Each snapshot is also
-kept (`SPX_IDX_0DTE/live/<date>/`, `NDX_IDX_0DTE/live/<date>/`) and one row per snapshot goes to `gex_live.csv`.
+Open `data/schwab/gex/live/live_map.html`: the maps two to a row, ES on the left and NQ on the right, the indexes
+(SPX, NDX) on top and the ETFs (SPY, QQQ) below. Each map is its own page (`es_map.html`, `nq_map.html`,
+`es_spy_map.html`, `nq_qqq_map.html`) and can be opened alone. NDX same-day options carry very little open interest;
+a map says so when its chain is below 20,000 contracts, and its levels are then weak. Each map shows the flip and the
+walls on the future, gamma, vanna and charm per level, and a "What changed" block: the strikes with the most
+contracts traded since the last snapshot, over five minutes and since the start, plus any move of the walls, the
+flip, the regime or net gamma. Each snapshot is also kept (`SPX_IDX_0DTE/live/<date>/`, `SPY_0DTE/live/<date>/`, ...)
+and one row per snapshot goes to `gex_live.csv`.
 
 Things to know:
 
-- Each cycle is three requests per symbol (calls, puts, the future's price), six for both. Schwab's limit is reported
-  as 120 requests a minute.
+- Each cycle is three requests per symbol (calls, puts, the future's price), twelve for all four. Schwab's limit is
+  reported as 120 requests a minute.
+- An ETF has no basis. Its strikes are moved onto the future by the price ratio future / ETF (about 10 for ES / SPY),
+  taken once when the run starts from the ETF's newest 1-minute bar and the future's bar of the same minute. The
+  ratio drifts a little with dividends and interest, so restart the run each day.
+- SPY and QQQ gamma covers the ETF chain alone. It is a separate position from the SPX or NDX chain, with its own
+  walls and flip: read each map on its own, and compare where the levels of the two sources agree.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the
   future also before 09:30. The basis is fixed when the run starts: start it before the open when you can, so it is
   taken at the previous cash close.

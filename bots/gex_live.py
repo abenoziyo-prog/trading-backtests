@@ -258,6 +258,15 @@ def grab(client: ReadOnlyClient, runs: dict, future: str, now: datetime, out: Pa
     return dict(now=now, px=px, chains=chains, errors=errors, fetch_s=time.monotonic() - t0, polled=p is None)
 
 
+def stream_status(on: bool, live: LivePrice) -> str:
+    """What the terminal says about the price stream: connected, still connecting, or why the last try failed."""
+    if on:
+        return "from the stream"
+    if live.error:
+        return f"one request per snapshot. The stream failed and will be tried again: {live.error}"
+    return "one request per snapshot while the stream connects"
+
+
 def main() -> None:
     snap.load_env()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -295,7 +304,7 @@ def main() -> None:
     print(f"Live maps: {page}\nA snapshot every {every:.1f} seconds"
           + (f", {interval(len(symbols), a.rate, a.every):.2f} once the {future} price stream is connected" if live else "")
           + ". Open the page once, it updates in place. Ctrl-C stops.\n", flush=True)
-    opened, printed, brake, done_at, streaming, n_done = False, 0.0, 1.0, None, None, 0
+    opened, printed, brake, done_at, streaming, stream_err, n_done = False, 0.0, 1.0, None, None, None, 0
     pending: list = []
     next_at = time.monotonic()
     try:
@@ -355,9 +364,9 @@ def main() -> None:
                         webbrowser.open(page.as_uri())
                         opened = True
                 on = bool(live and live.get() is not None)
-                if live is not None and on != streaming:
-                    why = f" ({live.error})" if not on and live.error else ""
-                    print(f"{datetime.now(NY):%H:%M:%S}  {future} price: " + ("from the stream" if on else f"one request per snapshot, stream not connected{why}"), flush=True)
+                if live is not None and (on != streaming or (not on and live.error != stream_err)):
+                    stream_err = live.error
+                    print(f"{datetime.now(NY):%H:%M:%S}  {future} price: " + stream_status(on, live), flush=True)
                     streaming = on
                 every = pace(brake, on)
     except KeyboardInterrupt:

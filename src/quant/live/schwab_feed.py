@@ -241,8 +241,10 @@ def run_price_stream(client: ReadOnlyClient, symbol: str, live: LivePrice, stop:
         seen = live.ticks
         try:
             asyncio.run(stream_price(client, symbol, live, stop))
+            if not stop.is_set():
+                live.error = f"{datetime.now(NY):%H:%M:%S} the stream ended without an error"
         except Exception as exc:  # a dropped connection or a refused login: keep why, then try again
-            live.connected, live.error = False, repr(exc)[:200]
+            live.connected, live.error = False, f"{datetime.now(NY):%H:%M:%S} {repr(exc)[:300]}"
         if stop.is_set():
             break
         wait = 2.0 if live.ticks > seen else min(wait * 2, 30.0)

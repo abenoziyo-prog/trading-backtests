@@ -331,7 +331,9 @@ def test_strike_table_matches_the_summary_and_keeps_volume_without_open_interest
     now = datetime(2026, 10, 27, 9, 20, tzinfo=NY)
     t, z = strike_table(c, 7722.0, now), zero_dte(c, 7722.0, now, "$SPX")
     assert round(t.call_gex.sum()) == z["call_gex"] and round(t.put_gex.sum()) == z["put_gex"]
-    assert t.call_gex.idxmax() == z["call_wall"] and t.put_gex.idxmin() == z["put_wall"]
+    here = t.index[abs(t.index - 7722.0).argmin()]
+    assert t.call_gex[t.index > here].idxmax() == z["call_wall"] and t.put_gex[t.index < here].idxmin() == z["put_wall"]
+    assert (t.call_gex - t.put_gex).idxmax() == z["gamma_peak"]
     assert t.at[7850.0, "call_volume"] == 900 and t.at[7850.0, "call_gex"] == 0 and (t.put_gex <= 0).all()
     assert t.call_oi.sum() == z["call_oi"] and list(t.index) == sorted(t.index)
 
@@ -551,3 +553,25 @@ def test_live_cycle_moves_etf_strikes_onto_the_future_by_the_price_ratio(tmp_pat
     assert (tmp_path / "live" / "es_spy_map.html").exists()
     row = pd.read_csv(tmp_path / "gex_live.csv").iloc[-1]
     assert row.fut_call_wall == round(m["callWall"] * 10.05, 2) and row.ratio == 10.05
+
+
+def test_walls_stay_on_their_side_of_the_price_when_all_gamma_is_at_the_money():
+    import pandas as pd
+    from quant.live.gex import walls
+    # late in the day: the strike at the price has the most gamma of the calls and of the puts
+    calls = pd.Series({7475.0: 0.72, 7490.0: 0.66, 7500.0: 1.87, 7505.0: 0.45, 7510.0: 0.53})
+    puts = pd.Series({7475.0: -1.07, 7490.0: -1.37, 7495.0: -1.20, 7500.0: -4.48, 7510.0: -1.18})
+    assert walls(calls, puts, 7500.72) == dict(call_wall=7510.0, put_wall=7490.0, gamma_peak=7500.0)
+    assert walls(calls, puts, 7511.0) == dict(call_wall=None, put_wall=7500.0, gamma_peak=7500.0)
+    assert walls(pd.Series(dtype=float), pd.Series(dtype=float), 7500.0) == dict(call_wall=None, put_wall=None, gamma_peak=None)
+
+
+def test_a_slowdown_after_429_is_taken_back_step_by_step():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("gex_live_ease", Path(__file__).resolve().parents[1] / "bots" / "gex_live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    assert live.ease(1.5 ** 4, live.RECOVER_S - 1) == 1.5 ** 4          # not yet
+    assert live.ease(1.5 ** 4, live.RECOVER_S) == 1.5 ** 3              # one step back
+    assert live.ease(1.2, live.RECOVER_S) == 1.0 and live.ease(1.0, 9999) == 1.0

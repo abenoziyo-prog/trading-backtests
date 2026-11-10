@@ -117,7 +117,8 @@ Things to know:
   A cycle cannot be shorter than Schwab takes to answer, about a second. The two requests are sent at the same time,
   except in the two minutes before the access token is renewed. If Schwab does not answer the combined request with
   both sides, the loop asks for calls and puts separately from then on (1.6 seconds) and says so. If Schwab answers
-  429 (too many requests), the loop slows down by half and says so. Do not run another script against the same
+  429 (too many requests), the loop slows down by half and says so; after two minutes without another 429 it takes
+  one step back, until it is at full pace again. Do not run another script against the same
   Schwab app at the same time: the limit is shared.
 - Requests overlap. A new request goes out on schedule while earlier answers are still on their way (at most four),
   so one slow answer does not delay the next snapshot. An answer that arrives after a newer one is dropped.
@@ -139,6 +140,9 @@ Things to know:
   about 90%.
 - SPY has no basis. Its strikes are moved onto `/ES` by the price ratio `/ES` / SPY (about 10), taken once when the
   run starts from SPY's newest 1-minute bar and the future's bar of the same minute.
+- The call wall is the strike above the price with the largest call gamma, the put wall the strike below the price
+  with the largest put gamma. The strike nearest the price belongs to neither: in the last hours of an expiry almost
+  all gamma sits there on both sides, so it is shown on its own tile as the gamma peak.
 - SPY gamma covers the SPY chain alone. It is a separate position from the SPX chain, with its own walls and flip:
   read each map on its own, and compare where the levels of the two sources agree.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the

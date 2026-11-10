@@ -12,7 +12,8 @@ Pace. A cycle is one request for the /ES price and one per symbol (calls and put
 limit is reported as 120 requests a minute (REQUEST_LIMIT); the loop spends --rate of them (default 110), which makes
 a cycle every 2 x 60 / 110 = 1.1 seconds. A cycle cannot be shorter than Schwab takes to answer, about a second. If
 Schwab does not answer the combined request with both sides, the loop asks for calls and puts separately from then on
-(three requests, 1.6 seconds). If Schwab answers 429 (too many requests) the loop slows down by half and says so.
+(three requests, 1.6 seconds). If Schwab answers 429 (too many requests) the loop slows down by half and says so; after RECOVER_S seconds without
+another it takes one step back, until it is at full pace again.
 
 Requests do not wait for one another: a new one goes out on schedule while earlier answers are still on their way (at
 most MAX_FLIGHT at a time), so a slow answer does not delay the next snapshot. An answer that arrives after a newer one
@@ -77,6 +78,7 @@ ETFS = ("SPY",)
 MAX_FLIGHT = 4       # snapshots whose answers may be awaited at the same time
 BASIS_JUMP = 5.0     # points: a larger change of the basis between two checks means the index price is not live
 BASIS_EVERY = 10.0   # seconds between requests for the future's price while it is derived from the live index price
+RECOVER_S = 120.0    # seconds without a 429 before the loop takes back one step of a slowdown
 PRINT_EVERY = 15     # seconds between status lines in the terminal (--verbose prints every cycle)
 
 
@@ -231,6 +233,13 @@ def interval(requests: int, rate: float, every: float = 0.0) -> float:
     return max(float(every), requests * 60.0 / min(max(rate, 1.0), REQUEST_LIMIT))
 
 
+def ease(brake: float, quiet_s: float) -> float:
+    """The slowdown factor after `quiet_s` seconds without a 429: one step (x1.5) is taken back per RECOVER_S, down to 1.
+    Schwab answers 429 now and then even at half the allowed rate, so a slowdown that never ends would add up over a
+    session to a loop several times slower than the limit asks for."""
+    return max(1.0, brake / 1.5) if brake > 1.0 and quiet_s >= RECOVER_S else brake
+
+
 def requests_per_cycle(states: list[dict]) -> int:
     """One for the future's price, one per chain (two for a chain that has to be asked for as calls and puts)."""
     return 1 + sum(2 if st.get("split") else 1 for st in states)
@@ -350,7 +359,7 @@ def main() -> None:
           + ". Open the page once, it updates in place. Ctrl-C stops.\n", flush=True)
     opened, printed, brake, done_at, streaming, stream_err, n_done, by_index = False, 0.0, 1.0, None, None, None, 0, False
     pending: list = []
-    next_at = time.monotonic()
+    next_at = quiet_from = time.monotonic()
     try:
         with ThreadPoolExecutor(MAX_FLIGHT) as outer, ThreadPoolExecutor(MAX_FLIGHT * (len(symbols) + 1)) as inner:
             while True:
@@ -416,6 +425,7 @@ def main() -> None:
                         print(f"{r['now']:%H:%M:%S}  Schwab answered 429 (too many requests): slowing down to one snapshot "
                               f"every {pace(brake, bool(p)):.1f} seconds", flush=True)
                         next_at = time.monotonic() + 10
+                        quiet_from = time.monotonic()
                     if a.open and not opened and lines:
                         webbrowser.open(page.as_uri())
                         opened = True
@@ -428,6 +438,10 @@ def main() -> None:
                     by_index = from_index()
                     print(f"{datetime.now(NY):%H:%M:%S}  {future} price: " + (f"from the live index price in the chain, checked against {future} every {BASIS_EVERY:.0f} seconds"
                                                                              if by_index else "one request per snapshot"), flush=True)
+                if ease(brake, time.monotonic() - quiet_from) < brake:   # no 429 for a while: take one step back
+                    brake, quiet_from = ease(brake, time.monotonic() - quiet_from), time.monotonic()
+                    print(f"{datetime.now(NY):%H:%M:%S}  no 429 for {RECOVER_S:.0f} seconds: back to one snapshot every "
+                          f"{pace(brake, on):.1f} seconds", flush=True)
                 every = pace(brake, on)
     except KeyboardInterrupt:
         print("\nStopped.")

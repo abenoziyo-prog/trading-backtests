@@ -89,22 +89,27 @@ Schwab's login expires after 7 days. When a run fails with an authorization erro
 
 ## Live map during the session
 
-`bots/gex_live.py` repeats the SPX 0DTE fetch every minute and rewrites one page that reloads itself in the browser:
+`bots/gex_live.py` repeats the SPX and NDX 0DTE fetch every minute and rewrites pages that reload themselves in the
+browser:
 
 ```bash
 cd ~/trading-backtests && source .venv/bin/activate
-python bots/gex_live.py --open          # every 60 seconds until 16:15 New York; Ctrl-C stops
-python bots/gex_live.py --every 30      # faster; 20 seconds is the floor
+python bots/gex_live.py --open                   # ES and NQ, every 60 seconds until 16:15 New York; Ctrl-C stops
+python bots/gex_live.py --every 30               # faster; 20 seconds is the floor
+python bots/gex_live.py --symbols '$SPX'         # ES only
 ```
 
-The page is `data/schwab/gex/live/es_map.html`. It shows the flip and the walls on `/ES`, gamma, vanna and charm per
+Open `data/schwab/gex/live/live_map.html`: ES (from SPX) on the left, NQ (from NDX) on the right. Each side is its
+own page (`es_map.html`, `nq_map.html`) and can be opened alone. NDX same-day options carry very little open
+interest; the NQ side says so when it is below 20,000 contracts, and its levels are then weak. Each map shows the flip and the walls on `/ES`, gamma, vanna and charm per
 level, and a "What changed" block: the strikes with the most contracts traded since the last snapshot, over five
 minutes and since the start, plus any move of the walls, the flip, the regime or net gamma. Each snapshot is also
-kept (`SPX_IDX_0DTE/live/<date>/`) and one row per snapshot goes to `gex_live.csv`.
+kept (`SPX_IDX_0DTE/live/<date>/`, `NDX_IDX_0DTE/live/<date>/`) and one row per snapshot goes to `gex_live.csv`.
 
 Things to know:
 
-- Each cycle is three requests (calls, puts, the `/ES` price). Schwab's limit is reported as 120 requests a minute.
+- Each cycle is three requests per symbol (calls, puts, the future's price), six for both. Schwab's limit is reported
+  as 120 requests a minute.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the
   future also before 09:30. The basis is fixed when the run starts: start it before the open when you can, so it is
   taken at the previous cash close.

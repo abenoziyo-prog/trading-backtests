@@ -407,3 +407,10 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     assert (tmp_path / "live" / "es_map.html").exists() and len(pd.read_csv(tmp_path / "gex_live.csv")) == 2
     assert len(list((tmp_path / "SPX_IDX_0DTE" / "live" / "2026-10-27").glob("*.parquet"))) == 2
     assert "ES 7,770.00" in live.line(d) or "/ES 7,770.00" in live.line(d)
+    # NDX goes to its own page, read on /NQ, and the frame shows the two side by side
+    from quant.live.gex_map import write_frame
+    nq = live.cycle(client, live.Session("/NQ", 60, index="NDX"), "$NDX", now, {}, tmp_path)
+    assert nq["M"]["index"] == "NDX" and nq["M"]["thin"] is True and (tmp_path / "live" / "nq_map.html").exists()
+    write_frame(tmp_path / "live" / "live_map.html", ["/ES", "/NQ"])
+    frame = (tmp_path / "live" / "live_map.html").read_text(encoding="utf-8")
+    assert frame.index("es_map.html") < frame.index("nq_map.html")

@@ -259,3 +259,63 @@ def test_local_env_defaults_and_readable_0dte_lines(tmp_path):
     assert "574 contracts" in early and "--wait" in early
     assert snap.oi_missing([dict(symbol="$SPX", listed=574, contracts=0), dict(symbol="$NDX", listed=9, contracts=9)])
     assert not snap.oi_missing([dict(symbol="$SPX", listed=574, contracts=300), dict(symbol="$NDX", error="boom")])
+
+
+def test_futures_levels_take_the_basis_live_or_at_the_last_cash_close():
+    from collections import namedtuple
+    from quant.live.gex import futures_levels
+    B = namedtuple("B", "t close")
+    z = dict(symbol="$SPX", spot=7550.0, gamma_flip=7535.0, call_wall=7550.0, put_wall=7500.0)
+    # Tuesday 06:34, cash closed: the index price is Monday's close, so the basis comes from Monday's 15:59 bar
+    bars = [B(datetime(2026, 11, 9, 15, 58, tzinfo=NY), 7588.0), B(datetime(2026, 11, 9, 15, 59, tzinfo=NY), 7590.0),
+            B(datetime(2026, 11, 10, 6, 33, tzinfo=NY), 7610.0)]
+    f = futures_levels(z, bars, datetime(2026, 11, 10, 6, 34, tzinfo=NY), "/ES")
+    assert f["fut_basis"] == 40.0 and f["fut_basis_kind"] == "close" and f["fut_last"] == 7610.0
+    assert (f["fut_gamma_flip"], f["fut_call_wall"], f["fut_put_wall"]) == (7575.0, 7590.0, 7540.0)
+    # Monday before the open reaches back over the weekend to Friday's close
+    fri = [B(datetime(2026, 11, 6, 15, 59, tzinfo=NY), 7560.0), B(datetime(2026, 11, 9, 9, 19, tzinfo=NY), 7600.0)]
+    assert futures_levels(z, fri, datetime(2026, 11, 9, 9, 20, tzinfo=NY), "/ES")["fut_basis"] == 10.0
+    # cash open: both prices are live; a stale last bar is refused
+    live = bars + [B(datetime(2026, 11, 10, 10, 29, tzinfo=NY), 7585.0)]
+    f = futures_levels(z, live, datetime(2026, 11, 10, 10, 30, tzinfo=NY), "/ES")
+    assert f["fut_basis"] == 35.0 and f["fut_basis_kind"] == "live" and f["fut_put_wall"] == 7535.0
+    assert futures_levels(z, bars, datetime(2026, 11, 10, 10, 30, tzinfo=NY), "/ES") == {}
+    # after the close the same day's 15:59 bar is the reference; no bars or no close bar gives nothing
+    f = futures_levels(z, live + [B(datetime(2026, 11, 10, 15, 59, tzinfo=NY), 7570.0)], datetime(2026, 11, 10, 16, 20, tzinfo=NY), "/ES")
+    assert f["fut_basis"] == 20.0 and f["fut_basis_at"].startswith("2026-11-10T15:59")
+    assert futures_levels(z, [], datetime(2026, 11, 10, 6, 34, tzinfo=NY), "/ES") == {}
+    assert futures_levels(z, bars[-1:], datetime(2026, 11, 10, 6, 34, tzinfo=NY), "/ES") == {}
+
+
+def test_snapshot_adds_futures_lines_and_survives_a_failed_price_history():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("snap2", Path(__file__).resolve().parents[1] / "bots/gex_snapshot.py")
+    snap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(snap)
+    now = datetime(2026, 11, 10, 6, 34, tzinfo=NY)
+    z = dict(asof="2026-11-10T06:34-05:00", symbol="$SPX", spot=7550.0, expiry="2026-11-10", dte=0, contracts=10,
+             regime="positive", net_gex=2.4e9, gamma_flip=7535.0, call_wall=7550.0, put_wall=7500.0)
+    ms = lambda *a: int(datetime(*a, tzinfo=NY).timestamp() * 1000)  # noqa: E731
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return dict(candles=[dict(datetime=ms(2026, 11, 9, 15, 59), open=1, high=1, low=1, close=7590.0),
+                                 dict(datetime=ms(2026, 11, 10, 6, 32), open=1, high=1, low=1, close=7610.0)])
+
+    class Fake:
+        def get_price_history_every_minute(self, symbol, **k):
+            assert symbol == "/ES"
+            return Resp()
+
+    out = snap.add_futures(ReadOnlyClient(Fake(), extra=ReadOnlyClient.MARKET_DATA), z, now)
+    assert out["fut_symbol"] == "/ES" and out["fut_call_wall"] == 7590.0
+    text = snap.describe(out)
+    assert "on /ES" in text and "basis +40.00" in text and "call wall 7,590.00" in text and "last vs flip    +35.00 (above)" in text
+    # price history blocked or failing: the row is kept, with the reason
+    bad = snap.add_futures(ReadOnlyClient(Fake(), extra=ReadOnlyClient.OPTION_CHAIN), z, now)
+    assert bad["net_gex"] == 2.4e9 and "PermissionError" in bad["fut_error"] and "not available" in snap.describe(bad)
+    assert snap.add_futures(None, dict(symbol="QQQ", contracts=5), now) == dict(symbol="QQQ", contracts=5)

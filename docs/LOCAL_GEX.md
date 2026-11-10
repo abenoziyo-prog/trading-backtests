@@ -52,6 +52,11 @@ python bots/gex_snapshot.py --zero-dte-only     # SPX and NDX 0DTE, a few second
 python bots/gex_snapshot.py                      # the same plus the 30-day chains, about a minute
 ```
 
+Each index block ends with the same levels on its future (`$SPX` on `/ES`, `$NDX` on `/NQ`): level + basis, where
+basis = future - index at one moment. While the cash index is open (09:30 to 16:00 New York) both prices are live.
+Outside those hours the index is frozen at its last close, so the basis is taken at that close (the future's 15:59
+bar). The basis drifts by a point or two in a day and steps at each quarterly roll: read the futures levels as zones.
+
 The terminal shows each symbol's regime, flip, walls and largest open-interest strikes; the rows are appended to
 `data/schwab/gex/gex_0dte.csv`. The run can be repeated during the session: gamma and the flip move with price, the
 open interest does not (it is yesterday's close figure all day).

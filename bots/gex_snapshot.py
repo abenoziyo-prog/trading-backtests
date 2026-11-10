@@ -21,6 +21,10 @@ Local use (docs/LOCAL_GEX.md): the Schwab keys are read from the repository's .e
 state/nqbot/schwab_token.json, and --zero-dte-only skips the 30-day chains for a run of a few seconds:
 
     python bots/gex_snapshot.py --zero-dte-only
+
+Futures levels: each 0DTE row also carries the flip and the walls moved onto the future the index is traded through
+($SPX -> /ES, $NDX -> /NQ): level + basis, from the future's 1-minute price history (quant.live.gex.futures_levels).
+Price history is the only call added; if it fails the row is saved without the futures columns.
 """
 from __future__ import annotations
 
@@ -37,8 +41,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from quant.live.gex import contracts, drop_am_settled, spot_of, summary, zero_dte  # noqa: E402
-from quant.live.schwab_feed import ReadOnlyClient, make_client  # noqa: E402
+from quant.live.gex import FUTURE, contracts, drop_am_settled, futures_levels, spot_of, summary, zero_dte  # noqa: E402
+from quant.live.schwab_feed import ReadOnlyClient, history_bars, make_client  # noqa: E402
 
 NY = ZoneInfo("America/New_York")
 OUT = ROOT / "data" / "schwab" / "gex"
@@ -119,6 +123,18 @@ def snapshot_0dte(client: ReadOnlyClient, symbol: str, now: datetime, lookahead:
     raise ValueError(f"no expiry found for {symbol} within {lookahead} days (last error: {last!r})")
 
 
+def add_futures(client: ReadOnlyClient, z: dict, now: datetime) -> dict:
+    """The row with its levels on the future (see futures_levels). Never raises: the reason goes to `fut_error`."""
+    fut = FUTURE.get(z.get("symbol"))
+    if not fut or z.get("error") or not z.get("contracts"):
+        return z
+    try:
+        lv = futures_levels(z, history_bars(client, fut, now - timedelta(days=5), now), now, fut)
+        return {**z, **(lv or dict(fut_symbol=fut, fut_error="no usable bar for the basis"))}
+    except Exception as exc:
+        return {**z, "fut_symbol": fut, "fut_error": repr(exc)[:200]}
+
+
 def append_csv(p: Path, log: pd.DataFrame) -> None:
     old = pd.read_csv(p) if p.exists() else None
     pd.concat([old, log], ignore_index=True).to_csv(p, index=False) if old is not None else log.to_csv(p, index=False)
@@ -158,6 +174,16 @@ def describe(z: dict) -> str:
              f"  largest call OI   {top('call')}",
              f"  largest put OI    {top('put')}",
              f"  total OI          calls {z.get('call_oi', 0):,}   puts {z.get('put_oi', 0):,}"]
+    if z.get("fut_basis") is not None:
+        when = "live, index and future now" if z["fut_basis_kind"] == "live" else f"at the cash close, {z['fut_basis_at'][:10]} 16:00"
+        lv = "   ".join(f"{n} {z[k]:,.2f}" for n, k in (("flip", "fut_gamma_flip"), ("call wall", "fut_call_wall"),
+                                                         ("put wall", "fut_put_wall")) if z.get(k) is not None)
+        lines += [f"  on {z['fut_symbol']:<14} last {z['fut_last']:,.2f}   basis {z['fut_basis']:+,.2f} ({when})", f"    levels          {lv}"]
+        if z.get("fut_gamma_flip") is not None:
+            d = z["fut_last"] - z["fut_gamma_flip"]
+            lines.append(f"    last vs flip    {d:+,.2f} ({'above' if d >= 0 else 'below'})")
+    elif z.get("fut_error"):
+        lines.append(f"  on {z['fut_symbol']:<14} not available ({z['fut_error']})")
     return "\n".join(lines)
 
 
@@ -178,7 +204,7 @@ def main() -> None:
     if not Path(os.environ["SCHWAB_TOKEN_PATH"]).exists():
         sys.exit(f"no Schwab token at {os.environ['SCHWAB_TOKEN_PATH']}: run python bots/schwab_login.py first")
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
-                         extra=ReadOnlyClient.OPTION_CHAIN)
+                         extra=ReadOnlyClient.MARKET_DATA)
     now = datetime.now(NY)
     rows = []
     for sym in ([] if a.zero_dte_only else a.symbols):
@@ -197,7 +223,7 @@ def main() -> None:
         zrows = []
         for sym in a.zero_dte:
             try:
-                zrows.append(snapshot_0dte(client, sym, now))
+                zrows.append(add_futures(client, snapshot_0dte(client, sym, now), now))
             except Exception as exc:  # the 0DTE rows are an extra: a failure here never fails the snapshot job
                 zrows.append(dict(asof=now.isoformat(timespec="minutes"), symbol=sym, error=repr(exc)[:300]))
             time.sleep(0.5)

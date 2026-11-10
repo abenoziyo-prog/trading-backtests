@@ -89,35 +89,38 @@ Schwab's login expires after 7 days. When a run fails with an authorization erro
 
 ## Live map during the session
 
-`bots/gex_live.py` fetches the SPX and SPY 0DTE chains as fast as Schwab's request limit allows and updates two ES
-maps in the browser:
+`bots/gex_live.py` fetches the SPX 0DTE chain as fast as Schwab's request limit allows and updates an ES map in the
+browser:
 
 ```bash
 cd ~/trading-backtests && source .venv/bin/activate
-python bots/gex_live.py --open                   # SPX and SPY, about every 2.7 seconds until 16:15 New York; Ctrl-C stops
-python bots/gex_live.py --symbols '$SPX'         # SPX alone, about every 1.6 seconds
+python bots/gex_live.py --open                   # ES from SPX, about every 1.1 seconds until 16:15 New York; Ctrl-C stops
+python bots/gex_live.py --symbols '$SPX' SPY     # a second map from SPY next to it: about every 1.6 seconds
 python bots/gex_live.py --every 10               # slower
 python bots/gex_live.py --verbose                # print every cycle (default: a status line every 15 seconds)
 ```
 
-Open `data/schwab/gex/live/live_map.html` once: ES from SPX on the left, ES from SPY on the right. The pages do not
-reload. Each looks for new data twice a second and redraws in place, so scroll position, toggles and the open table
-stay as they are. Each map is its own page (`es_map.html`, `es_spy_map.html`) and can be opened alone. A map shows the
-flip and the walls on `/ES`, gamma, vanna and charm per level, and a "What changed" block: the strikes with the most
-contracts traded since the last snapshot, over five minutes and since the start, plus any move of the walls, the
-flip, the regime or net gamma. One snapshot a minute is kept (`SPX_IDX_0DTE/live/<date>/`, `SPY_0DTE/live/<date>/`)
-and one row per snapshot and symbol goes to `gex_live.csv`.
+Open `data/schwab/gex/live/live_map.html` once. The page does not reload: it looks for new data four times a second
+and redraws in place, so scroll position, toggles and the open table stay as they are. With SPY there are two maps
+side by side (`es_map.html`, `es_spy_map.html`; each can be opened alone). A map shows the flip and the walls on
+`/ES`, gamma, vanna and charm per level, and a "What changed" block: the strikes with the most contracts traded since
+the last snapshot, over five minutes and since the start, plus any move of the walls, the flip, the regime or net
+gamma. One snapshot a minute is kept (`SPX_IDX_0DTE/live/<date>/`) and one row per snapshot and symbol goes to
+`gex_live.csv`.
 
 Things to know:
 
-- Pace. A cycle is five requests: the `/ES` price, then calls and puts of each symbol, the four chain requests at the
-  same time. Schwab's limit is reported as 120 requests a minute (the figure comes from the schwabdev library's
-  documentation, not from Schwab's own pages). The loop spends 110 of them (`--rate`), which is one cycle every 2.7
-  seconds. If Schwab answers 429 (too many requests), the loop slows down by half and says so. Do not run another
-  script against the same Schwab app at the same time: the limit is shared.
-- A faster fetch only helps as far as Schwab's data moves. The `/ES` price is the newest 1-minute candle including the
-  minute still forming. How often Schwab refreshes option volume and implied volatility inside a minute is not
-  documented; `gex_live.csv` shows it (count the rows where `call_volume` changed).
+- Pace. A cycle is two requests: the `/ES` price and the SPX chain, calls and puts together. Schwab's limit is
+  reported as 120 requests a minute (the figure comes from the schwabdev library's documentation, not from Schwab's
+  own pages). The loop spends 110 of them (`--rate`), which is one cycle every 1.1 seconds; `--rate 120` makes it 1.0.
+  A cycle cannot be shorter than Schwab takes to answer, about a second. The two requests are sent at the same time,
+  except in the two minutes before the access token is renewed. If Schwab does not answer the combined request with
+  both sides, the loop asks for calls and puts separately from then on (1.6 seconds) and says so. If Schwab answers
+  429 (too many requests), the loop slows down by half and says so. Do not run another script against the same
+  Schwab app at the same time: the limit is shared.
+- Schwab's data does move that fast: on 2026-11-10 before the open, at one snapshot every 3 seconds, option volume
+  changed in 99% of snapshots and the `/ES` price (the newest 1-minute candle including the minute still forming) in
+  about 90%.
 - SPY has no basis. Its strikes are moved onto `/ES` by the price ratio `/ES` / SPY (about 10), taken once when the
   run starts from SPY's newest 1-minute bar and the future's bar of the same minute.
 - SPY gamma covers the SPY chain alone. It is a separate position from the SPX chain, with its own walls and flip:

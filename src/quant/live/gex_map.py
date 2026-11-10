@@ -20,7 +20,7 @@ THIN_OI = 20000      # contracts of open interest below which the page warns tha
 TOP = 8              # strikes listed in the "what changed" table
 KEEP_S = 420         # seconds of snapshots kept for the "last 5 minutes" comparison (the first one is always kept)
 HIST = 480           # points drawn on the level history; a longer run is thinned evenly
-POLL_MS = 500        # how often the open page looks for new data
+POLL_MS = 250        # how often the open page looks for new data
 # page values shown with their change against the previous fetch
 DELTA_KEYS = ("futLast", "spot", "indexQuote", "flip", "callWall", "putWall", "net", "cg", "pg", "vex", "chx", "callVol", "putVol")
 
@@ -182,7 +182,7 @@ def write_frame(path: Path, maps: list[tuple[str, str]]) -> None:
 <style>
 html,body{{margin:0;height:100%;background:#f6f6f4}}
 @media (prefers-color-scheme:dark){{html,body{{background:#111110}}}}
-.panes{{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#8a898455}}
+.panes{{display:grid;grid-template-columns:{"1fr 1fr" if len(maps) > 1 else "1fr"};gap:1px;background:#8a898455}}
 iframe{{width:100%;min-width:0;height:100vh;border:0;background:#f6f6f4;display:block}}
 @media (prefers-color-scheme:dark){{iframe{{background:#111110}}}}
 @media (max-width:900px){{.panes{{grid-template-columns:1fr}}iframe{{height:92vh}}}}

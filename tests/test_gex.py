@@ -372,7 +372,7 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     live = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(live)
     live.snap.time.sleep = lambda s: None
-    calls = []
+    calls, asked, no_puts_in_all = [], [], False
     ms = lambda *a: int(datetime(*a, tzinfo=NY).timestamp() * 1000)  # noqa: E731
 
     class Resp:
@@ -388,6 +388,11 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     class Fake:
         def get_option_chain(self, symbol, contract_type=None, **k):
             calls.append("chain")
+            asked.append(contract_type.value)
+            if contract_type.value == "ALL":   # calls and puts in one answer, unless this fake Schwab drops the puts
+                both = zero_chain("CALL")
+                both["putExpDateMap"] = {} if no_puts_in_all else zero_chain("PUT")["putExpDateMap"]
+                return Resp(both)
             return Resp(zero_chain(contract_type.value))
 
         def get_price_history_every_minute(self, symbol, start_datetime=None, **k):
@@ -403,7 +408,7 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     assert d["M"]["futLast"] == 7770.0 and d["M"]["spot"] == 7732.0 and calls == ["chain", "chain", "history", "history"]
     calls.clear()
     live.cycle(client, ses, "$SPX", now + timedelta(minutes=1), state, tmp_path)
-    assert calls == ["chain", "chain", "history"]                                   # the basis is fetched once
+    assert calls == ["chain", "history"] and asked[-1] == "ALL"   # one request for both sides; the basis is fetched once
     assert (tmp_path / "live" / "es_map.html").exists() and len(pd.read_csv(tmp_path / "gex_live.csv")) == 2
     assert len(list((tmp_path / "SPX_IDX_0DTE" / "live" / "2026-10-27").glob("*.parquet"))) == 2
     assert "ES 7,770.00" in live.line(d) or "/ES 7,770.00" in live.line(d)
@@ -414,7 +419,7 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     with ThreadPoolExecutor(2) as pool:
         chain3 = live.fetch(client, "$SPX", t3, state, tmp_path, pool)
     d3 = live.cycle(client, ses, "$SPX", t3, state, tmp_path, chain3, (7771.0, t3), 0.4)
-    assert calls == ["chain", "chain"] and d3["M"]["futLast"] == 7771.0 and d3["M"]["snaps"] == 3 and d3["M"]["fetchS"] == 0.4
+    assert calls == ["chain"] and asked[-1] == "ALL" and d3["M"]["futLast"] == 7771.0 and d3["M"]["snaps"] == 3 and d3["M"]["fetchS"] == 0.4
     assert len(list((tmp_path / "SPX_IDX_0DTE" / "live" / "2026-10-27").glob("*.parquet"))) == 2
     assert len(pd.read_csv(tmp_path / "gex_live.csv")) == 3
     # the page does not reload: it polls the data file written next to it
@@ -424,8 +429,18 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     assert js.startswith("__gex({") and json.loads(js[6:-2])["M"]["snaps"] == 3
     # only ES sources; the pace comes from the request budget: 2 requests per symbol and 1 for the future
     assert sorted(live.SOURCES) == ["$SPX", "SPY"] and set(live.SOURCES.values()) == {"/ES"}
-    assert round(live.interval(2, 110), 2) == 2.73 and round(live.interval(1, 110), 2) == 1.64
-    assert live.interval(2, 500) == 2.5 and live.interval(2, 110, every=10) == 10
+    # the pace comes from the request budget: 1 request for the future and 1 per chain (2 when it has to be split)
+    assert live.requests_per_cycle([{}]) == 2 and live.requests_per_cycle([{}, {"split": True}]) == 4
+    assert round(live.interval(2, 110), 2) == 1.09 and round(live.interval(3, 110), 2) == 1.64
+    assert live.interval(2, 500) == 1.0 and live.interval(2, 110, every=10) == 10
+    assert live.token_fresh(client) is False   # unknown expiry: the requests of a cycle are not sent together
+    # a combined answer without one side: the loop goes back to one request per side, for good
+    no_puts_in_all = True
+    st2, t4 = {"day": state["day"], "saved": "0921"}, now + timedelta(minutes=1, seconds=5)
+    c4, _ = live.fetch(client, "$SPX", t4, st2, tmp_path)
+    assert st2["split"] is True and asked[-3:] == ["ALL", "CALL", "PUT"] and set(c4.put_call) == {"CALL", "PUT"}
+    live.fetch(client, "$SPX", t4, st2, tmp_path)
+    assert asked[-2:] == ["CALL", "PUT"] and live.requests_per_cycle([st2]) == 3
     from quant.live.gex_map import write_frame
     write_frame(tmp_path / "live" / "live_map.html", [("/ES", "SPX"), ("/ES", "SPY")])
     frame = (tmp_path / "live" / "live_map.html").read_text(encoding="utf-8")

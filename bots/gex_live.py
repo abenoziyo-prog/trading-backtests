@@ -1,23 +1,24 @@
-"""Live ES dealer maps: fetch the SPX and SPY 0DTE chains as fast as Schwab's request limit allows and update the pages.
+"""Live ES dealer map: fetch the SPX 0DTE chain as fast as Schwab's request limit allows and update the page.
 
-    python bots/gex_live.py --open          # ES from SPX and from SPY, about every 2.7 seconds until 16:15 New York
-    python bots/gex_live.py --symbols '$SPX'   # SPX alone: about every 1.6 seconds
-    python bots/gex_live.py --every 10      # slower
+    python bots/gex_live.py --open                    # ES from SPX, about every 1.1 seconds until 16:15 New York
+    python bots/gex_live.py --symbols '$SPX' SPY      # a second map from SPY: about every 1.6 seconds
+    python bots/gex_live.py --every 10                # slower
 
 Read-only, like bots/gex_snapshot.py: the only Schwab calls are the option chain and the future's price history
 (ReadOnlyClient.MARKET_DATA).
 
-Pace. A cycle is one request for the /ES price and two per symbol (calls, puts): five for SPX and SPY. Schwab's limit is
-reported as 120 requests a minute (REQUEST_LIMIT); the loop spends --rate of them (default 110), which makes a cycle
-every 5 x 60 / 110 = 2.7 seconds. The chain requests of a cycle run at the same time, so a cycle lasts about as long as
-its slowest request. If Schwab answers 429 (too many requests) the loop slows down by half and says so.
+Pace. A cycle is one request for the /ES price and one per symbol (calls and puts together): two for SPX. Schwab's
+limit is reported as 120 requests a minute (REQUEST_LIMIT); the loop spends --rate of them (default 110), which makes
+a cycle every 2 x 60 / 110 = 1.1 seconds. A cycle cannot be shorter than Schwab takes to answer, about a second. If
+Schwab does not answer the combined request with both sides, the loop asks for calls and puts separately from then on
+(three requests, 1.6 seconds). If Schwab answers 429 (too many requests) the loop slows down by half and says so.
 
 Each cycle:
   1. the latest /ES price (the newest 1-minute candle, including the minute still forming)
   2. the nearest-expiry chains with every strike; one snapshot a minute is kept under
      data/schwab/gex/<SYMBOL>_0DTE/live/<date>/
   3. the Greeks at the price implied by /ES (index: /ES minus the basis; SPY: /ES divided by the price ratio), then
-     data/schwab/gex/live/es_map.html and es_spy_map.html plus their data files (quant.live.gex_map): levels on /ES,
+     data/schwab/gex/live/es_map.html (es_spy_map.html) plus its data file (quant.live.gex_map): levels on /ES,
      gamma / vanna / charm per strike, and what changed against the previous snapshot, five minutes ago and the start
   4. one row per symbol is appended to data/schwab/gex/gex_live.csv
 
@@ -26,7 +27,7 @@ future's 15:59 bar minus the chain's index price, which is that close); inside c
 the start. Start it before the open when possible. SPY has no basis: its strikes are moved onto /ES by the price ratio
 /ES / SPY, taken once at the start from SPY's newest 1-minute bar and the future's bar of the same minute.
 
-data/schwab/gex/live/live_map.html shows the two maps side by side. Open it once: the pages update in place.
+data/schwab/gex/live/live_map.html shows the map (with SPY, the two side by side). Open it once: it updates in place.
 """
 from __future__ import annotations
 
@@ -107,8 +108,20 @@ def fetch(client: ReadOnlyClient, symbol: str, now: datetime, state: dict, out: 
         state["day"], state["saved"] = date.fromisoformat(str(c.expiry.iloc[0])[:10]), f"{now:%H%M}"
         return c, spot
     from schwab.client import Client
-    sides = (Client.Options.ContractType.CALL, Client.Options.ContractType.PUT)
-    got = list((pool.map if pool else map)(lambda ct: snap.fetch_side(client, symbol, state["day"], ct), sides))
+    T = Client.Options.ContractType
+    got = []
+    if not state.get("split"):   # calls and puts in one request; if Schwab does not answer that with both sides, two
+        try:
+            got = [snap.fetch_side(client, symbol, state["day"], T.ALL)]
+            if got[0][0].put_call.nunique() < 2:
+                raise ValueError("one side missing")
+        except Exception as exc:
+            if "429" in repr(exc):
+                raise
+            state["split"], got = True, []
+            print(f"{now:%H:%M:%S}  {symbol}: the combined calls-and-puts request failed ({repr(exc)[:120]}); using two requests from now on", flush=True)
+    if not got:
+        got = list((pool.map if pool else map)(lambda ct: snap.fetch_side(client, symbol, state["day"], ct), (T.CALL, T.PUT)))
     parts, spot = [p for p, _ in got if len(p)], next((x for _, x in got if x is not None), None)
     if not parts or spot is None:
         raise ValueError(f"empty {symbol} chain for {state['day']}")
@@ -182,16 +195,31 @@ def line(data: dict) -> str:
     return f"{m['clock']}  {m['index']:<4}{m['future']} {m['futLast']:,.2f}  {str(m['regime']).upper()} {net}  {lv}{act}  [{m['fetchS']}s]"
 
 
-def interval(n_symbols: int, rate: float, every: float = 0.0) -> float:
-    """Seconds between cycles: the fastest the request budget allows (2 requests per symbol and 1 for the future),
-    or `every` when that is slower."""
-    return max(float(every), (2 * n_symbols + 1) * 60.0 / min(max(rate, 1.0), REQUEST_LIMIT))
+def token_fresh(client: ReadOnlyClient, margin_s: float = 120.0) -> bool:
+    """True when the access token is known to stay valid for `margin_s` more seconds. Only then are the requests of a
+    cycle sent at the same time: a renewal must happen in one request alone, or two would write the token file at once.
+    Anything unknown counts as not fresh."""
+    try:
+        return float(client.token_metadata.token["expires_at"]) - time.time() > margin_s
+    except Exception:
+        return False
+
+
+def interval(requests: int, rate: float, every: float = 0.0) -> float:
+    """Seconds between cycles: the fastest the request budget allows for `requests` per cycle, or `every` when that
+    is slower."""
+    return max(float(every), requests * 60.0 / min(max(rate, 1.0), REQUEST_LIMIT))
+
+
+def requests_per_cycle(states: list[dict]) -> int:
+    """One for the future's price, one per chain (two for a chain that has to be asked for as calls and puts)."""
+    return 1 + sum(2 if st.get("split") else 1 for st in states)
 
 
 def main() -> None:
     snap.load_env()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--symbols", nargs="+", default=["$SPX", "SPY"], choices=sorted(SOURCES), help="shown left to right")
+    ap.add_argument("--symbols", nargs="+", default=["$SPX"], choices=sorted(SOURCES), help="shown left to right")
     ap.add_argument("--rate", type=float, default=DEFAULT_RATE, help=f"requests a minute to spend (at most {REQUEST_LIMIT})")
     ap.add_argument("--every", type=float, default=0.0, help="seconds between snapshots; 0 (default) = as fast as --rate allows")
     ap.add_argument("--until", default="16:15", help="New York time to stop at (HH:MM)")
@@ -202,7 +230,7 @@ def main() -> None:
         if not os.environ.get(k):
             sys.exit(f"{k} is not set. Add it to {ROOT / '.env'}")
     symbols = list(dict.fromkeys(a.symbols))
-    every = interval(len(symbols), a.rate, a.every)
+    every = interval(1 + len(symbols), a.rate, a.every)
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
                          extra=ReadOnlyClient.MARKET_DATA)
     runs = {sym: (Session(SOURCES[sym], every, index=sym.strip("$")), {}) for sym in symbols}
@@ -210,23 +238,30 @@ def main() -> None:
     page = snap.OUT / "live" / "live_map.html"
     write_frame(page, [(SOURCES[sym], sym.strip("$")) for sym in symbols])
     hh, mm = (int(x) for x in a.until.split(":"))
-    print(f"Live maps: {page}\nA snapshot every {every:.1f} seconds ({(2 * len(symbols) + 1) * 60 / every:.0f} requests a minute). "
+    print(f"Live maps: {page}\nA snapshot every {every:.1f} seconds ({(1 + len(symbols)) * 60 / every:.0f} requests a minute). "
           f"Open the page once, it updates in place. Ctrl-C stops.\n", flush=True)
-    opened, printed, slow = False, 0.0, 0
+    opened, printed, slow, brake = False, 0.0, 0, 1.0
     try:
-        with ThreadPoolExecutor(len(symbols)) as outer, ThreadPoolExecutor(2 * len(symbols)) as inner:
+        with ThreadPoolExecutor(len(symbols) + 1) as outer, ThreadPoolExecutor(2 * len(symbols)) as inner:
             while True:
                 now = datetime.now(NY)
                 if (now.hour, now.minute) >= (hh, mm):
                     print(f"{a.until} New York reached: stopping.")
                     break
                 started, errors = time.monotonic(), []
-                try:   # alone and first: a token renewal happens here, not in several requests at once
-                    px = last_price(client, future, now)
+                px_job = outer.submit(last_price, client, future, now) if token_fresh(client) else None
+                try:   # with a token close to its renewal: alone and first, so the renewal happens in this one request
+                    px = last_price(client, future, now) if px_job is None else None
                 except Exception as exc:
                     px = None
                     errors.append(f"{future} price: {repr(exc)[:160]}")
                 jobs = {sym: outer.submit(fetch, client, sym, now, state, snap.OUT, inner) for sym, (_, state) in runs.items()}
+                if px_job is not None:
+                    try:
+                        px = px_job.result()
+                    except Exception as exc:
+                        px = None
+                        errors.append(f"{future} price: {repr(exc)[:160]}")
                 chains = {}
                 for sym, job in jobs.items():
                     try:
@@ -248,9 +283,8 @@ def main() -> None:
                 for e in errors:
                     print(f"{now:%H:%M:%S}  failed: {e}", flush=True)
                 if any("429" in e for e in errors):   # too many requests: slow down by half and wait before the next try
-                    every = min(every * 1.5, 60.0)
-                    for ses, _ in runs.values():
-                        ses.every_s = every
+                    brake = min(brake * 1.5, 20.0)
+                    every = min(60.0, brake * interval(requests_per_cycle([st for _, st in runs.values()]), a.rate, a.every))
                     print(f"{now:%H:%M:%S}  Schwab answered 429 (too many requests): now one snapshot every {every:.1f} seconds", flush=True)
                     time.sleep(10)
                 if took > every:
@@ -260,6 +294,9 @@ def main() -> None:
                 if a.open and not opened and lines:
                     webbrowser.open(page.as_uri())
                     opened = True
+                every = min(60.0, brake * interval(requests_per_cycle([st for _, st in runs.values()]), a.rate, a.every))
+                for ses, _ in runs.values():
+                    ses.every_s = every
                 time.sleep(max(0.0, every - (time.monotonic() - started)))
     except KeyboardInterrupt:
         print("\nStopped.")

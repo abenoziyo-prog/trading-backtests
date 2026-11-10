@@ -450,6 +450,19 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
         calls.clear()
         r = live.grab(client, runs, "/ES", t5, tmp_path, pool, lp)
         assert calls == ["chain"] and r["px"] == (7780.25, t5)
+    # the terminal says why the stream is not used: a failed try is retried and its reason is kept and shown
+    from quant.live.schwab_feed import run_price_stream
+    import threading
+    bad, halt, naps = LivePrice(), threading.Event(), []
+
+    def nap(seconds):
+        naps.append(seconds)
+        if len(naps) == 3:
+            halt.set()
+    run_price_stream(ReadOnlyClient(object()), "/ES", bad, halt, sleep=nap)   # this client cannot log in to the stream
+    assert naps == [4.0, 8.0, 16.0] and bad.get() is None and "get_user_preferences" in bad.error
+    assert "stream failed" in live.stream_status(False, bad) and "get_user_preferences" in live.stream_status(False, bad)
+    assert live.stream_status(False, LivePrice()).endswith("while the stream connects") and live.stream_status(True, lp) == "from the stream"
     # a combined answer without one side: the loop goes back to one request per side, for good
     no_puts_in_all = True
     st2, t4 = {"day": state["day"], "saved": "0921"}, now + timedelta(minutes=1, seconds=5)

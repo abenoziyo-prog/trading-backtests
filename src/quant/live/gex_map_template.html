@@ -5,10 +5,10 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
 <style>
 /* layout: header with regime, a row of key levels, then one tall strike ladder (price on the vertical axis, like a chart) */
-:root{--bg:#f6f6f4;--surface:#fcfcfb;--fg:#0b0b0b;--fg2:#52514e;--muted:#8a8984;--grid:#e4e3de;--pos:#2a78d6;--neg:#e34948;--mid:#f0efec;--line:#0b0b0b;--flip:#6250d6;--good:#0ca30c;
+:root{--bg:#f6f6f4;--surface:#fcfcfb;--fg:#0b0b0b;--fg2:#52514e;--muted:#8a8984;--grid:#e4e3de;--pos:#2a78d6;--neg:#e34948;--mid:#f0efec;--line:#0b0b0b;--flip:#6250d6;--good:#0ca30c;--up:#0a7d0a;--dn:#c62f2e;
 --display:"Space Grotesk",system-ui,sans-serif;--body:Inter,system-ui,sans-serif}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111110;--surface:#1a1a19;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--grid:#2e2e2b;--pos:#3987e5;--neg:#e66767;--mid:#383835;--line:#f0efec;--flip:#9085e9;--good:#2fc02f;color-scheme:dark}}
-:root[data-theme="dark"]{--bg:#111110;--surface:#1a1a19;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--grid:#2e2e2b;--pos:#3987e5;--neg:#e66767;--mid:#383835;--line:#f0efec;--flip:#9085e9;--good:#2fc02f;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111110;--surface:#1a1a19;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--grid:#2e2e2b;--pos:#3987e5;--neg:#e66767;--mid:#383835;--line:#f0efec;--flip:#9085e9;--good:#2fc02f;--up:#3fcf3f;--dn:#f07a7a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#111110;--surface:#1a1a19;--fg:#f0efec;--fg2:#c3c2b7;--muted:#8f8e86;--grid:#2e2e2b;--pos:#3987e5;--neg:#e66767;--mid:#383835;--line:#f0efec;--flip:#9085e9;--good:#2fc02f;--up:#3fcf3f;--dn:#f07a7a;color-scheme:dark}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:14px;line-height:1.45}
 .wrap{max-width:860px;margin:0 auto;padding-block:28px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:20px}
 h1{font-family:var(--display);font-size:26px;font-weight:600;margin:0;text-wrap:balance}
@@ -63,6 +63,8 @@ h2.sec{font-family:var(--display);font-size:18px;font-weight:600;margin:8px 0 -8
 .mv th,.mv td{padding:5px 10px}.mv td.hot{font-weight:600;color:var(--fg)}
 .mv td:first-child,.mv th:first-child{text-align:left}
 .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
+.dl{font-style:normal;font-size:max(.72em,11px);font-weight:500;font-family:var(--body);white-space:nowrap;color:var(--muted)}
+.dl.up{color:var(--up)}.dl.dn{color:var(--dn)}
 .tag{font-size:11px;border:1px solid var(--grid);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--fg2);white-space:nowrap}
 </style></head><body style="margin:0">
 <div class="wrap">
@@ -120,20 +122,24 @@ const D=/*DATA*/null;
 const M=D.M, R=D.R, B=M.basis, F=M.future.replace('/','');
 const $=i=>document.getElementById(i), f=n=>n==null?'n/a':n.toLocaleString('en-US',{maximumFractionDigits:2}), f0=n=>n==null?'n/a':Math.round(n).toLocaleString('en-US'), sg=n=>n==null?'n/a':(n>0?'+':n<0?'\u2212':'')+f(Math.abs(n));
 const E=k=>k==null?null:k+B;
+const P=M.prev;
+// change against the previous fetch, in brackets: green when higher, red when lower
+function dl(a,b,scale,unit){if(!P||a==null||b==null)return'';const d=(a-b)/(scale||1), r=Math.round(d*100)/100;return ` <em class="dl ${r>0?'up':r<0?'dn':''}">(${r===0?'0':sg(r)}${unit||''})</em>`}
+const dk=(k,scale,unit)=>P?dl(M[k],P[k],scale,unit):'';
 const store={get(k,d){try{return localStorage.getItem('gexmap.'+k)||d}catch(e){return d}},set(k,v){try{localStorage.setItem('gexmap.'+k,v)}catch(e){}}};
 const S={mode:store.get('mode','split'),win:store.get('win',M.snaps>5?'5':'1')};
 $('h1').textContent=`${F} dealer map, live`;
 $('sub').textContent=`SPX options expiring ${M.expiry} \u00b7 ${M.day} \u00b7 levels moved onto ${F} by the basis of ${sg(B)} points (${M.basisNote})`;
 const age=()=>Math.round((Date.now()-new Date(M.asof).getTime())/1000);
 function status(){const a=age(), stale=a>Math.max(3*M.every,180);
- $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+Math.round(a/60)+' minutes old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span><span>every ${M.every}s, page reloads every ${M.refresh}s</span>`}
+ $('status').innerHTML=`<span><i class="dot${stale?' stale':''}"></i>Snapshot <b>${M.clock}</b> New York</span><span>${stale?'<b>Stale: '+Math.round(a/60)+' minutes old. Is the script still running?</b>':'age <b>'+a+'s</b>'}</span><span>fetch took <b>${M.fetchS==null?'n/a':M.fetchS+'s'}</b></span><span>snapshot <b>${M.snaps}</b> since ${M.first}</span>${M.prevClock?'<span>brackets: change since <b>'+M.prevClock+'</b></span>':''}<span>every ${M.every}s, page reloads every ${M.refresh}s</span>`}
 status();setInterval(status,1000);
 $('reg').textContent=(M.regime||'unknown')+' gamma';
 if(M.regime!=='positive')$('pill').classList.add('neg');
-$('net').textContent=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn';
+$('net').innerHTML=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn'+dk('net',1e9,'bn');
 $('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.spot-M.flip))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
 const firstOi=s=>{if(!s)return[null,null];const[k,v]=s.split('|')[0].split(':');return[+k,+v]}, tc=firstOi(M.topCall), tp=firstOi(M.topPut);
-const lv=[[F+' last','<i class="key"></i>',f(M.futLast),'index equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip)),'SPX '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall)),'SPX '+f0(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall)),'SPX '+f0(M.putWall)],['Basis','',sg(B),M.basisNote],['SPX quote','',f(M.indexQuote),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn','all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn','all strikes'],['Net vanna','',sg(M.vex)+'M','per +1 vol point'],['Net charm','',sg(M.chx)+'M','per hour'],['Volume today','',f0(M.callVol+M.putVol),f0(M.callVol)+' calls, '+f0(M.putVol)+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
+const lv=[[F+' last','<i class="key"></i>',f(M.futLast)+dk('futLast'),'index equivalent '+f(M.spot)],['Gamma flip','<i class="key flip"></i>',f(E(M.flip))+dk('flip'),'SPX '+f(M.flip)],['Call wall','<i class="key box"></i>',f(E(M.callWall))+dk('callWall'),'SPX '+f0(M.callWall)],['Put wall','<i class="key box neg"></i>',f(E(M.putWall))+dk('putWall'),'SPX '+f0(M.putWall)],['Basis','',sg(B),M.basisNote],['SPX quote','',f(M.indexQuote)+dk('indexQuote'),'from Schwab, may be stale'],['Call GEX','',sg(M.cg/1e3)+'bn'+dk('cg',1e3,'bn'),'all strikes'],['Put GEX','',sg(M.pg/1e3)+'bn'+dk('pg',1e3,'bn'),'all strikes'],['Net vanna','',sg(M.vex)+'M'+dk('vex',1,'M'),'per +1 vol point'],['Net charm','',sg(M.chx)+'M'+dk('chx',1,'M'),'per hour'],['Volume today','',f0(M.callVol+M.putVol)+(P?dl(M.callVol+M.putVol,P.callVol+P.putVol):''),f0(M.callVol)+dk('callVol')+' calls, '+f0(M.putVol)+dk('putVol')+' puts'],['Largest OI','',f(E(tc[0]))+' / '+f(E(tp[0])),'call / put, on '+F]];
 $('levels').innerHTML=lv.map(l=>`<div class="lv"><span>${l[1]}${l[0]}</span><b>${l[2]}</b><small>${l[3]}</small></div>`).join('');
 // what changed
 $('chgh').textContent=M.snaps<2?'First snapshot of this run: changes appear from the next one':`Most active strikes over the last ${M.win}, and level moves`;

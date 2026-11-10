@@ -16,6 +16,8 @@ import pandas as pd
 TEMPLATE = Path(__file__).with_name("gex_map_template.html")
 HALF_WIDTH = 200.0   # index points each side of spot shown on the strike ladders
 TOP = 8              # strikes listed in the "what changed" table
+# page values shown with their change against the previous fetch
+DELTA_KEYS = ("futLast", "spot", "indexQuote", "flip", "callWall", "putWall", "net", "cg", "pg", "vex", "chx", "callVol", "putVol")
 
 
 def _f(x, nd=2):
@@ -26,6 +28,7 @@ class Session:
     def __init__(self, future: str = "/ES", every_s: int = 60, refresh_s: int = 20):
         self.future, self.every_s, self.refresh_s = future, every_s, refresh_s
         self.snaps: list[dict] = []   # dict(t, z, vol (DataFrame call_volume/put_volume), fut, basis)
+        self.last_m: dict | None = None   # the previous snapshot's page values, for the per-fetch deltas
 
     def _back(self, minutes: float) -> dict | None:
         """The snapshot closest to `minutes` before the latest one (None when the run is younger than that)."""
@@ -75,6 +78,8 @@ class Session:
                  chx=_f(table.charm.sum() / 1e6), fetchS=_f(fetch_s, 1), every=self.every_s, refresh=self.refresh_s,
                  snaps=len(self.snaps), first=first["t"].strftime("%H:%M"), win=("5 minutes" if win == "5" else "1 snapshot"),
                  prevClock=prev["t"].strftime("%H:%M:%S") if prev else None)
+        m["prev"] = {k: self.last_m.get(k) for k in DELTA_KEYS} if self.last_m else None
+        self.last_m = m
         return dict(M=m, R=rows, movers=movers, H=hist[-480:], notes=self.notes(win))
 
     def notes(self, win: str) -> list[str]:

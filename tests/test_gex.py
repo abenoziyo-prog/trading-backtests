@@ -434,6 +434,22 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     assert round(live.interval(2, 110), 2) == 1.09 and round(live.interval(3, 110), 2) == 1.64
     assert live.interval(2, 500) == 1.0 and live.interval(2, 110, every=10) == 10
     assert live.token_fresh(client) is False   # unknown expiry: the requests of a cycle are not sent together
+    # the network part of a snapshot: with a connected price stream it is the chain alone, otherwise price and chain
+    from concurrent.futures import ThreadPoolExecutor as Pool
+    from quant.live.schwab_feed import LivePrice, handle_quote_message
+    lp = LivePrice()
+    handle_quote_message(dict(content=[dict(key="/NQZ26", LAST_PRICE=1.0), dict(key="/ESZ26", BID_PRICE=7779.75),
+                                       dict(key="/ESZ26", LAST_PRICE=7780.25)]), "/ES", lp)
+    assert lp.price == 7780.25 and lp.ticks == 1 and lp.get() is None   # not connected yet: the loop asks for the price itself
+    runs, t5 = {"$SPX": (ses, state)}, now + timedelta(minutes=1, seconds=4)
+    with Pool(4) as pool:
+        calls.clear()
+        r = live.grab(client, runs, "/ES", t5, tmp_path, pool, lp)
+        assert sorted(calls) == ["chain", "history"] and r["px"][0] == 7770.0 and not r["errors"] and "$SPX" in r["chains"]
+        lp.connected = True
+        calls.clear()
+        r = live.grab(client, runs, "/ES", t5, tmp_path, pool, lp)
+        assert calls == ["chain"] and r["px"] == (7780.25, t5)
     # a combined answer without one side: the loop goes back to one request per side, for good
     no_puts_in_all = True
     st2, t4 = {"day": state["day"], "saved": "0921"}, now + timedelta(minutes=1, seconds=5)

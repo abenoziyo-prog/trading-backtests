@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -176,6 +177,76 @@ def handle_chart_message(msg: dict, symbol: str, agg: MinuteAggregator) -> None:
         if sym and sym != symbol.upper() and not sym.startswith(symbol.upper()):
             continue
         agg.update(int(item["CHART_TIME_MILLIS"]), item["OPEN_PRICE"], item["HIGH_PRICE"], item["LOW_PRICE"], item["CLOSE_PRICE"])
+
+
+class LivePrice:
+    """The latest traded price of one symbol: written by the stream thread (run_price_stream), read by a loop."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.price: float | None = None
+        self.connected = False      # subscribed and receiving; False while (re)connecting
+        self.ticks = 0              # price updates received
+        self.error: str | None = None   # why the last connection ended
+
+    def set(self, price: float) -> None:
+        with self._lock:
+            self.price, self.ticks = float(price), self.ticks + 1
+
+    def get(self) -> float | None:
+        """The price while the stream is connected, else None (the caller then asks for the price itself)."""
+        with self._lock:
+            return self.price if self.connected else None
+
+
+def handle_quote_message(msg: dict, symbol: str, live: LivePrice) -> None:
+    """LEVELONE_FUTURES messages -> live.price. A message carries only the fields that changed, so one without a
+    last price (a bid or ask update) is skipped. "/ES" also matches the dated contract symbol (e.g. /ESZ26)."""
+    for item in msg.get("content", []):
+        sym = str(item.get("key") or item.get("SYMBOL") or "").upper()
+        if sym and sym != symbol.upper() and not sym.startswith(symbol.upper()):
+            continue
+        p = item.get("LAST_PRICE")
+        if p is not None and float(p) > 0:
+            live.set(float(p))
+
+
+async def stream_price(client: ReadOnlyClient, symbol: str, live: LivePrice, stop: threading.Event, quiet_s: float = 60.0) -> None:
+    """Stream LEVELONE_FUTURES quotes of `symbol` into `live` until `stop` is set, the connection drops, or nothing
+    arrives for `quiet_s` seconds (both raise). Market data only: a quote subscription, nothing else."""
+    from schwab.streaming import StreamClient
+
+    sc = StreamClient(client)
+    await sc.login()
+    F = StreamClient.LevelOneFuturesFields
+    sc.add_level_one_futures_handler(lambda msg: handle_quote_message(msg, symbol, live))
+    await sc.level_one_futures_subs([symbol], fields=[F.SYMBOL, F.BID_PRICE, F.ASK_PRICE, F.LAST_PRICE])
+    live.connected, live.error = True, None
+    try:
+        while not stop.is_set():
+            await asyncio.wait_for(sc.handle_message(), timeout=quiet_s)
+    finally:
+        live.connected = False
+        try:
+            await sc.logout()
+        except Exception:
+            pass
+
+
+def run_price_stream(client: ReadOnlyClient, symbol: str, live: LivePrice, stop: threading.Event, sleep=time.sleep) -> None:
+    """Thread target: keep stream_price connected until `stop` is set. After a failure it waits 2 seconds and
+    reconnects; failures that follow one another without a price in between double the wait, up to 30 seconds."""
+    wait = 2.0
+    while not stop.is_set():
+        seen = live.ticks
+        try:
+            asyncio.run(stream_price(client, symbol, live, stop))
+        except Exception as exc:  # a dropped connection or a refused login: keep why, then try again
+            live.connected, live.error = False, repr(exc)[:200]
+        if stop.is_set():
+            break
+        wait = 2.0 if live.ticks > seen else min(wait * 2, 30.0)
+        sleep(wait)
 
 
 async def stream_bars(client: ReadOnlyClient, symbol: str, agg: MinuteAggregator, stop: asyncio.Event) -> None:

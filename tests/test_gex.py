@@ -373,6 +373,7 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     spec.loader.exec_module(live)
     live.snap.time.sleep = lambda s: None
     calls, asked, no_puts_in_all = [], [], False
+    from time import monotonic as time_now
     ms = lambda *a: int(datetime(*a, tzinfo=NY).timestamp() * 1000)  # noqa: E731
 
     class Resp:
@@ -450,6 +451,18 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
         calls.clear()
         r = live.grab(client, runs, "/ES", t5, tmp_path, pool, lp)
         assert calls == ["chain"] and r["px"] == (7780.25, t5)
+    # cash hours: the price is asked for every BASIS_EVERY seconds only; in between it is the chain's index price + basis
+    t6, ctl = now.replace(hour=10, minute=0), dict(index=True, px_at=-1e9)
+    with Pool(4) as pool:
+        calls.clear()
+        r1 = live.grab(client, runs, "/ES", t6, tmp_path, pool, None, ctl)
+        r2 = live.grab(client, runs, "/ES", t6 + timedelta(seconds=1), tmp_path, pool, None, ctl)
+        assert r1["asked"] and r1["px"] is not None and not r2["asked"] and r2["px"] is None and calls.count("history") == 1
+        ctl["px_at"] -= live.BASIS_EVERY
+        assert live.grab(client, runs, "/ES", t6 + timedelta(seconds=11), tmp_path, pool, None, ctl)["asked"]
+        early = live.grab(client, runs, "/ES", now, tmp_path, pool, None, dict(index=True, px_at=time_now()))
+        assert early["asked"]                                   # 09:20, the cash market is closed: asked every time
+    assert live.implied_price(runs, r2["chains"]) == (7722.0 + state["basis"], "$SPX") and live.index_symbol({"SPY": 1}) is None
     # the terminal says why the stream is not used: a failed try is retried and its reason is kept and shown
     from quant.live.schwab_feed import run_price_stream
     import threading

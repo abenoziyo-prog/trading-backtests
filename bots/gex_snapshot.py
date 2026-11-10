@@ -16,6 +16,11 @@ strike limit, because the largest open-interest strikes of a same-day expiry oft
 largest open-interest strikes of the calls and of the puts: quant.live.gex.zero_dte) and the raw rows to
 data/schwab/gex/<SYMBOL>_0DTE/<YYYY-MM-DD_HHMM>.parquet. The 09:20 row is the one for the session: the 16:20 row
 already describes the next session's expiry, on open interest that is one day old by then.
+
+Local use (docs/LOCAL_GEX.md): the Schwab keys are read from the repository's .env, the token path defaults to
+state/nqbot/schwab_token.json, and --zero-dte-only skips the 30-day chains for a run of a few seconds:
+
+    python bots/gex_snapshot.py --zero-dte-only
 """
 from __future__ import annotations
 
@@ -118,21 +123,53 @@ def append_csv(p: Path, log: pd.DataFrame) -> None:
     pd.concat([old, log], ignore_index=True).to_csv(p, index=False) if old is not None else log.to_csv(p, index=False)
 
 
+def load_env(root: Path = ROOT, env=os.environ) -> None:
+    """Local runs: read the repository's .env (values already set in the environment win) and default the token path
+    to the one bots/schwab_login.py writes. In the cloud container there is no .env and the runner sets the path."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(root / ".env")
+    except ImportError:  # the container image installs only what the bots need
+        pass
+    env.setdefault("SCHWAB_TOKEN_PATH", str(root / "state" / "nqbot" / "schwab_token.json"))
+
+
+def describe(z: dict) -> str:
+    """One 0DTE row as a few readable lines for the terminal."""
+    if z.get("error") or not z.get("contracts"):
+        return f"{z['symbol']}: no 0DTE data ({z.get('error') or 'no live expiry with open interest'})"
+
+    def top(side: str) -> str:
+        return ", ".join(f"{k} ({int(v):,})" for k, v in (x.split(":") for x in str(z.get(f"top_{side}_oi") or "").split("|") if x))
+    net = z.get("net_gex")
+    lines = [f"{z['symbol']}  expiry {z['expiry']} (in {z['dte']} days)  spot {z['spot']:,.2f}  at {z['asof']}",
+             f"  regime            {str(z.get('regime', 'n/a')).upper()}" + (f"   net GEX {net / 1e9:+.2f}bn per 1% move" if net is not None else ""),
+             f"  gamma flip        {z.get('gamma_flip')}   call wall {z.get('call_wall')}   put wall {z.get('put_wall')}",
+             f"  largest call OI   {top('call')}",
+             f"  largest put OI    {top('put')}",
+             f"  total OI          calls {z.get('call_oi', 0):,}   puts {z.get('put_oi', 0):,}"]
+    return "\n".join(lines)
+
+
 def main() -> None:
+    load_env()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbols", nargs="+", default=SYMBOLS)
     ap.add_argument("--days", type=int, default=30, help="expirations up to this many days ahead")
     ap.add_argument("--strikes", type=int, default=120, help="strikes around the money, both sides together (~60 each side)")
     ap.add_argument("--zero-dte", nargs="*", default=ZERO_DTE, help="symbols for the nearest-expiry summary (none: skip)")
+    ap.add_argument("--zero-dte-only", action="store_true", help="skip the 30-day chains; only the 0DTE rows")
     a = ap.parse_args()
     missing = [k for k in ("SCHWAB_API_KEY", "SCHWAB_APP_SECRET", "SCHWAB_TOKEN_PATH") if not os.environ.get(k)]
     if missing:
-        sys.exit(f"missing environment variables: {', '.join(missing)} (see deploy/nq_paper_bot.env.example)")
+        sys.exit(f"missing environment variables: {', '.join(missing)} (put them in .env: see docs/LOCAL_GEX.md)")
+    if not Path(os.environ["SCHWAB_TOKEN_PATH"]).exists():
+        sys.exit(f"no Schwab token at {os.environ['SCHWAB_TOKEN_PATH']}: run python bots/schwab_login.py first")
     client = make_client(os.environ["SCHWAB_API_KEY"], os.environ["SCHWAB_APP_SECRET"], os.environ["SCHWAB_TOKEN_PATH"],
                          extra=ReadOnlyClient.OPTION_CHAIN)
     now = datetime.now(NY)
     rows = []
-    for sym in a.symbols:
+    for sym in ([] if a.zero_dte_only else a.symbols):
         try:
             rows.append(snapshot(client, sym, now, a.days, a.strikes))
         except Exception as exc:  # one symbol failing (e.g. not served by the chains endpoint) must not stop the others
@@ -140,8 +177,9 @@ def main() -> None:
         time.sleep(0.5)
     log = pd.DataFrame(rows)
     OUT.mkdir(parents=True, exist_ok=True)
-    append_csv(OUT / "gex_daily.csv", log)
-    print(log.to_string(index=False))
+    if rows:
+        append_csv(OUT / "gex_daily.csv", log)
+        print(log.to_string(index=False))
     zrows = []
     for sym in a.zero_dte:
         try:
@@ -152,8 +190,10 @@ def main() -> None:
     if zrows:
         z = pd.DataFrame(zrows)
         append_csv(OUT / "gex_0dte.csv", z)
-        print(z.to_string(index=False))
-    if "error" in log and log.error.notna().all():
+        print("\n" + "\n\n".join(describe(r) for r in zrows))
+        print(f"\nSaved to {OUT / 'gex_0dte.csv'}")
+    judged = rows or zrows   # the 30-day chains decide the exit code; the 0DTE rows only when they are all that ran
+    if judged and all(r.get("error") for r in judged):
         sys.exit(1)
 
 

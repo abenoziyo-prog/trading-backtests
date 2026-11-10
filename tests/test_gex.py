@@ -577,3 +577,18 @@ def test_walls_come_from_open_interest_near_the_price():
     assert tie == dict(call_wall=7510.0, put_wall=7490.0)                                 # the nearer strike on a tie
     assert walls(call_oi, put_oi, 7800.0)["call_wall"] is None
     assert walls(pd.Series(dtype=float), pd.Series(dtype=float), 7500.0) == dict(call_wall=None, put_wall=None)
+
+
+def test_the_levels_basis_is_the_median_of_the_recent_readings():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("gex_live_basis", Path(__file__).resolve().parents[1] / "bots" / "gex_live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    seen: list = []
+    assert live.steady_basis(seen, 22.7) == 22.7
+    out = [live.steady_basis(seen, b) for b in (21.8, 23.2, 22.5, 20.2, 22.6, 23.4, 22.4)]
+    assert max(out[2:]) - min(out[2:]) <= 0.2           # the readings span 3.2 points, the basis in use hardly moves
+    for b in [30.0] * live.BASIS_KEEP:
+        last = live.steady_basis(seen, b)
+    assert last == 30.0 and len(seen) == live.BASIS_KEEP  # old readings drop out

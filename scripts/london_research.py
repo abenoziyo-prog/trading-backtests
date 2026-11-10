@@ -132,7 +132,7 @@ def features(d: dict, ctx: dict, idx: int, side: int, px: float) -> dict:
                 gap_al=side * (px - d["PDC"]) / R0, pos_pd_al=side * (px - (d["PDH"] + d["PDL"]) / 2) / R0,
                 pre_sweep_al=side * ctx["pre_sweep"], vix_prev=d["vix_prev"], vix_chg=d["vix_chg"],
                 dxy_al=side * (dxy_now / d["dxy_prev_close"] - 1) * 100, R0_pct=R0 / d["PDC"] * 100,
-                entry_hour=d["mod"][idx] / 60, monday=float(d["day"].dayofweek == 0), friday=float(d["day"].dayofweek == 4))
+                entry_hour=d["mod"][idx] / 60, monday=float(d["day"].day_of_week == 0), friday=float(d["day"].day_of_week == 4))
 
 
 def day_context(d: dict) -> dict | None:

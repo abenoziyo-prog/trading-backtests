@@ -40,7 +40,7 @@ def rth_minutes(name: str) -> pd.DataFrame:
     m = s.load(s.INSTRUMENTS[name])
     m = m[(m.index >= pd.Timestamp("2025-04-10", tz=s.TZ)) & (m.index < pd.Timestamp("2026-10-10", tz=s.TZ))]
     mod = s._minutes(m.index.tz_convert(s.TZ))
-    return m[(mod >= 570) & (mod < 960) & (m.index.dayofweek < 5)]
+    return m[(mod >= 570) & (mod < 960) & (m.index.day_of_week < 5)]
 
 
 def candles(day_min: pd.DataFrame, n: int) -> pd.DataFrame:

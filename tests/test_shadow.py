@@ -15,7 +15,7 @@ NY = ZoneInfo("America/New_York")
 def minutes(first: date, last: date, seed: int = 1) -> pd.DataFrame:
     """Random-walk 1-minute bars around the clock (futures hours: closed Fri 17:00 -> Sun 18:00)."""
     idx = pd.date_range(datetime.combine(first, time(0), NY), datetime.combine(last, time(16), NY), freq="1min", inclusive="left")
-    idx = idx[~((idx.dayofweek == 5) | ((idx.dayofweek == 4) & (idx.hour >= 17)) | ((idx.dayofweek == 6) & (idx.hour < 18)))]
+    idx = idx[~((idx.day_of_week == 5) | ((idx.day_of_week == 4) & (idx.hour >= 17)) | ((idx.day_of_week == 6) & (idx.hour < 18)))]
     c = 20000 + np.cumsum(np.random.default_rng(seed).normal(0, 4, len(idx)))
     o = np.r_[c[0], c[:-1]]
     return pd.DataFrame(dict(open=o, high=np.maximum(o, c) + 2, low=np.minimum(o, c) - 2, close=c), index=idx)

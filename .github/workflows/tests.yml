@@ -1,0 +1,26 @@
+# Unit tests on every push to main and every pull request. Includes the safety tests that keep the bots
+# data-only (tests/test_live_bot.py: no order code, ReadOnlyClient blocks every order endpoint).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install --quiet -e ".[dev,nqbot]"
+      - name: Unit tests (fail on pandas 4 deprecations)
+        run: python -m pytest -q -W error::pandas.errors.Pandas4Warning

@@ -52,7 +52,7 @@ def nq_days() -> pd.DataFrame:
     n = pd.read_parquet(ROOT / "data/free/NSXUSD_1min_histdata.parquet")
     n.index = n.index.tz_convert(NY)
     mod = n.index.hour * 60 + n.index.minute
-    r = n[(mod >= 570) & (mod < 960) & (n.index.dayofweek < 5) & (n.index >= "2011-04-01") & (n.index < str(END.date()))]
+    r = n[(mod >= 570) & (mod < 960) & (n.index.day_of_week < 5) & (n.index >= "2011-04-01") & (n.index < str(END.date()))]
     day = r.index.tz_localize(None).normalize()
     g = r.groupby(day)
     d = pd.DataFrame(dict(open=g.open.first(), high=g.high.max(), low=g.low.min(), close=g.close.last(), bars=g.close.size()))

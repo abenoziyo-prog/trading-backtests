@@ -32,7 +32,7 @@ def day_table(name: str) -> pd.DataFrame:
     # one extra prior day is needed only for the first day's PDH/PDL (1-day look-back)
     m = m[(m.index >= pd.Timestamp("2025-04-01", tz=s.TZ)) & (m.index < pd.Timestamp("2026-10-10", tz=s.TZ))]
     mod = s._minutes(m.index.tz_convert(s.TZ))
-    rth = m[(mod >= 570) & (mod < 960) & (m.index.dayofweek < 5)]
+    rth = m[(mod >= 570) & (mod < 960) & (m.index.day_of_week < 5)]
     d = s.aggregate(rth, [rth.index.tz_localize(None).normalize()], ["day"])
     d = d[d.bars >= 200]  # skip stray partial sessions (half days have 210 bars)
     # keep only official US trading days (futures also trade short sessions on market holidays)

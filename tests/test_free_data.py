@@ -42,7 +42,7 @@ def test_align_to_cme_break_shifts_only_lagging_weeks():
     assert (out[: len(normal)] == normal).all()
     shifted = out[len(normal):]
     assert (shifted == lagging + pd.Timedelta(hours=1)).all()
-    midweek = shifted[shifted.dayofweek < 4]
+    midweek = shifted[shifted.day_of_week < 4]
     assert (midweek.hour == 17).sum() == 0  # break now at 17:00
 
 

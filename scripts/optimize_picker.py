@@ -29,6 +29,14 @@ MAX_STEPS = 15
 MIN_TRADES_PER_DAY = 1.0
 
 
+def _ns(s: pd.Series) -> np.ndarray:
+    """Times as int64 nanoseconds (tz-aware -> UTC; naive left as is), for fast ordering in the picker."""
+    s = pd.to_datetime(s)
+    if s.dt.tz is not None:
+        s = s.dt.tz_convert("UTC").dt.tz_localize(None)
+    return s.to_numpy("datetime64[ns]").astype(np.int64)
+
+
 class Arrays:
     """Per-candidate numpy arrays: entry ns, exit ns, P&L, day."""
 
@@ -36,8 +44,7 @@ class Arrays:
         self.c = {}
         for cand, g in lib.groupby("cand", sort=False):
             g = g.sort_values("entry_time", kind="stable")
-            self.c[cand] = (g.entry_time.to_numpy().astype("datetime64[ns]").astype(np.int64),
-                            g.exit_time.to_numpy().astype("datetime64[ns]").astype(np.int64),
+            self.c[cand] = (_ns(g.entry_time), _ns(g.exit_time),
                             g.pnl_usd.to_numpy(), g.day.to_numpy())
 
 

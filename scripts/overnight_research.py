@@ -179,7 +179,7 @@ def layer_b(nights: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
             rng_a = n["h"][sel_a].max() - n["l"][sel_a].min() if sel_a.any() else np.nan
             rows.append(dict(day=n["day"], event=ev, et=(n["t0"] + pd.Timedelta(minutes=e)).strftime("%H:%M"), R0=n["R0"],
                              pre60=pre, r5=r5, r15=r15, r30=r30, next60=n60, next120=n120, range_before=rng_b,
-                             range_after=rng_a, prior_up=prior_up, evening_gap_R=gap, vix=n["vix"], monday=n["day"].dayofweek == 0))
+                             range_after=rng_a, prior_up=prior_up, evening_gap_R=gap, vix=n["vix"], monday=n["day"].day_of_week == 0))
     d = pd.DataFrame(rows)
     d["period"] = d.day.map(period_of)
     out = []
@@ -257,7 +257,7 @@ def layer_c(nights: list[dict]) -> pd.DataFrame:
             row = dict(day=n["day"], level=name, touched=True, opened_beyond=False, touch_et=n["t"][i].strftime("%H:%M"),
                        session="asia" if rel < 480 else "london", prior_up=n["PDC"] > n["prev_open"],
                        evening_gap_R=(n["o"][0] - n["PDC"]) / n["R0"], vix=n["vix"], dxy_al=side * n["dxy_chg"],
-                       monday=n["day"].dayofweek == 0)
+                       monday=n["day"].day_of_week == 0)
             for k in (0.05, 0.10, 0.20):
                 row[f"outcome_{k:.2f}"] = first_passage(n, i, level, side, k)
             for tf in TFS:

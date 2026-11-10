@@ -215,7 +215,7 @@ def timeframe_levels(inst: Instrument, df: pd.DataFrame, minutes: int) -> pd.Dat
 def week_of(trading_days: pd.DatetimeIndex) -> pd.DatetimeIndex:
     """Monday of each trading day's week (futures Sunday-evening bars already roll to Monday)."""
     d = pd.DatetimeIndex(trading_days)
-    return (d - pd.to_timedelta(d.dayofweek, unit="D")).normalize()
+    return (d - pd.to_timedelta(d.day_of_week, unit="D")).normalize()
 
 
 def weekly_levels(inst: Instrument, df: pd.DataFrame) -> pd.DataFrame:

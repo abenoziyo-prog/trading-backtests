@@ -21,7 +21,7 @@ RTH = (570, 960)  # minutes after midnight: 09:30 and 16:00 ET
 
 def rth(df: pd.DataFrame) -> pd.DataFrame:
     mod = df.index.hour * 60 + df.index.minute
-    return df[(mod >= RTH[0]) & (mod < RTH[1]) & (df.index.dayofweek < 5)]
+    return df[(mod >= RTH[0]) & (mod < RTH[1]) & (df.index.day_of_week < 5)]
 
 
 def anchor_key(idx: pd.DatetimeIndex, anchor: str) -> np.ndarray:
@@ -29,7 +29,7 @@ def anchor_key(idx: pd.DatetimeIndex, anchor: str) -> np.ndarray:
     if anchor == "session":
         return np.asarray(day)
     if anchor == "week":
-        return np.asarray(day - pd.to_timedelta(day.dayofweek, unit="D"))
+        return np.asarray(day - pd.to_timedelta(day.day_of_week, unit="D"))
     raise ValueError(f"unknown anchor {anchor!r}")
 
 

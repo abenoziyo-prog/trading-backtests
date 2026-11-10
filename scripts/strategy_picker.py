@@ -107,7 +107,7 @@ def pick(trades: pd.DataFrame, gate: bool = True, warmup: int = WARMUP) -> pd.Da
             continue
         if gate:
             h = shadow[r.strategy]
-            closed = h.r_multiple[h.exit_time.values <= r.entry_time.to_datetime64()]
+            closed = h.r_multiple[(h.exit_time <= r.entry_time).to_numpy()]
             if len(closed) >= warmup and closed.iloc[-warmup:].sum() <= 0:
                 reason[i] = "gated off"
                 continue

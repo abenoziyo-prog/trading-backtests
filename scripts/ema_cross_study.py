@@ -85,7 +85,7 @@ def run(m: pd.DataFrame, tf: int, fast: int, slow: int, mode: str) -> pd.DataFra
     if mode == "24h":
         return trades_from_positions(m, st.to_numpy())
     mod = m.index.hour * 60 + m.index.minute
-    r = (mod >= 570) & (mod < 960) & (m.index.dayofweek < 5)
+    r = (mod >= 570) & (mod < 960) & (m.index.day_of_week < 5)
     mm, pos = m[r], st.to_numpy()[r].copy()
     mod = np.asarray(mod[r])
     day = np.asarray(mm.index.tz_localize(None).normalize())

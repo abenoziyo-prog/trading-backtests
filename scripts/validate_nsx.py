@@ -30,9 +30,9 @@ def early_close_days(trading_days: pd.DatetimeIndex) -> set:
     """US equity half days: Friday after Thanksgiving, Dec 24 and Jul 3 when they are trading days."""
     days = set()
     for d in trading_days:
-        if d.month == 11 and d.dayofweek == 4 and 23 <= d.day <= 29:
+        if d.month == 11 and d.day_of_week == 4 and 23 <= d.day <= 29:
             days.add(d)
-        elif (d.month, d.day) in {(12, 24), (7, 3)} and d.dayofweek < 5:
+        elif (d.month, d.day) in {(12, 24), (7, 3)} and d.day_of_week < 5:
             days.add(d)
     return days
 
@@ -65,7 +65,7 @@ def main() -> None:
     span = (ndx.index >= date.min()) & (ndx.index <= date.max())
     trading = ndx.index[span]
     half = early_close_days(trading)
-    in_rth = (mod >= RTH_OPEN) & (mod < RTH_CLOSE) & (idx.dayofweek < 5)
+    in_rth = (mod >= RTH_OPEN) & (mod < RTH_CLOSE) & (idx.day_of_week < 5)
     rth_counts = pd.Series(1, index=date[in_rth]).groupby(level=0).size()
     expected = pd.Series([210 if t in half else 390 for t in trading], index=trading)
     present = rth_counts.reindex(trading, fill_value=0)
@@ -101,7 +101,7 @@ def main() -> None:
     section("2b. Full futures session and gaps")
     session = (local + pd.Timedelta(hours=6)).normalize()  # Sun 18:00 -> Monday session
     per_session = pd.Series(1, index=session).groupby(level=0).size()
-    midweek = per_session[per_session.index.dayofweek.isin([1, 2, 3])]  # Tue-Thu sessions are full 23h
+    midweek = per_session[per_session.index.day_of_week.isin([1, 2, 3])]  # Tue-Thu sessions are full 23h
     print("bars per Tue-Thu futures session (23h = 1380 max), median by year:")
     print("  " + "  ".join(f"{y}:{int(v)}" for y, v in midweek.groupby(midweek.index.year).median().items()))
     step = idx.to_series().diff()
@@ -167,7 +167,7 @@ def main() -> None:
     # Which hour's close matches the official close best? (detects shifted days)
     close_at = {}
     for hour_end in (14, 15, 16):
-        m = rth if hour_end < 16 else d[(mod < 17 * 60) & (idx.dayofweek < 5)].assign(date=date[(mod < 17 * 60) & (idx.dayofweek < 5)], mod=mod[(mod < 17 * 60) & (idx.dayofweek < 5)])
+        m = rth if hour_end < 16 else d[(mod < 17 * 60) & (idx.day_of_week < 5)].assign(date=date[(mod < 17 * 60) & (idx.day_of_week < 5)], mod=mod[(mod < 17 * 60) & (idx.day_of_week < 5)])
         sel = m[m["mod"] == hour_end * 60 + 59]
         close_at[hour_end] = sel.groupby("date").close.last()
     cmp = pd.DataFrame({h: np.abs(np.log(s / ndx.close.reindex(s.index))) * 1e4 for h, s in close_at.items()}).dropna()

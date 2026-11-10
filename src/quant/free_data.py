@@ -126,7 +126,7 @@ def _session_week(ts: pd.DatetimeIndex) -> pd.PeriodIndex:
 def detect_shifted_weeks(ts: pd.DatetimeIndex, break_start: int = 17, break_end: int = 18) -> pd.PeriodIndex:
     """Weeks whose daily break shows up an hour early, i.e. stamped an hour behind New York."""
     week = _session_week(ts)
-    midweek = ts.dayofweek < 4
+    midweek = ts.day_of_week < 4
     before = pd.Series((ts.hour == break_start - 1) & midweek).groupby(week).sum()
     last = pd.Series((ts.hour == break_end - 1) & midweek).groupby(week).sum()
     return before[(before < 0.2 * last) & (last > 60)].index

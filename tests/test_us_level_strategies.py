@@ -73,7 +73,7 @@ def test_v2_allows_multiple_trades_without_overlap():
     t = pd.DataFrame(ul2.day_trades("NSX", pd.Timestamp("2026-03-02"), r, dm, "1m", 1))
     s1 = t[t.strategy == "S1"]
     assert len(s1) == 2  # two separate crosses below 100, the second after the first trade closed
-    assert (pd.DatetimeIndex(s1.entry_time[1:]).values >= pd.DatetimeIndex(s1.exit_time[:-1]).values).all()
+    assert (s1.entry_time.to_numpy()[1:] >= s1.exit_time.to_numpy()[:-1]).all()
 
 
 _spec3 = importlib.util.spec_from_file_location("gs", Path(__file__).resolve().parents[1] / "scripts" / "us_gap_strategies.py")

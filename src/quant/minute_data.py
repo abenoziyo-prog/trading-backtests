@@ -108,7 +108,7 @@ def rth_only(df: pd.DataFrame) -> pd.DataFrame:
     """Keep regular US equity session bars (09:30-15:59 New York, weekdays)."""
     idx = df.index.tz_convert(TZ) if df.index.tz is not None else df.index
     minutes = idx.hour * 60 + idx.minute
-    mask = (minutes >= 9 * 60 + 30) & (minutes < 16 * 60) & (idx.dayofweek < 5)
+    mask = (minutes >= 9 * 60 + 30) & (minutes < 16 * 60) & (idx.day_of_week < 5)
     return df[mask]
 
 

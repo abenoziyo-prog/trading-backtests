@@ -22,7 +22,7 @@ KEEP_S = 420         # seconds of snapshots kept for the "last 5 minutes" compar
 HIST = 480           # points drawn on the level history; a longer run is thinned evenly
 POLL_MS = 250        # how often the open page looks for new data
 # page values shown with their change against the previous fetch
-DELTA_KEYS = ("futLast", "spot", "indexQuote", "flip", "callWall", "putWall", "net", "cg", "pg", "vex", "chx", "callVol", "putVol")
+DELTA_KEYS = ("futLast", "spot", "indexQuote", "flip", "callWall", "putWall", "cwSize", "pwSize", "net", "cg", "pg", "vex", "chx", "callVol", "putVol")
 
 
 def _lvl(snap: dict, key: str) -> float | None:

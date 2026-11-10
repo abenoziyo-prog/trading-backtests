@@ -599,3 +599,8 @@ def test_the_levels_basis_is_the_median_of_the_recent_readings():
     for b in [30.0] * live.BASIS_KEEP:
         last = live.steady_basis(seen, b)
     assert last == 30.0 and len(seen) == live.BASIS_KEEP  # old readings drop out
+
+
+def test_the_wall_size_is_among_the_values_shown_with_their_change():
+    from quant.live.gex_map import DELTA_KEYS
+    assert {"cwSize", "pwSize"} <= set(DELTA_KEYS)

@@ -62,10 +62,9 @@ The free S&P history used for the day-size call needs no key:
 python bots/fetch_spx_gex.py
 ```
 
-**Open interest can be 0 early in the day.** Schwab's API (chains and quotes alike) reported open interest 0 for every
-expiry at 06:22 New York time on 2026-11-10, while Schwab's own screens showed the figures and the volumes matched.
-Later in the day the API does carry it (seen at 11:43 on 2026-10-27). To start the fetch early and let it keep trying
-every 5 minutes until the figures appear:
+**Open interest can be 0 very early.** On 2026-11-10 every request to Schwab (chains and quotes, every expiry) returned
+open interest 0 from 06:22 to 06:28 New York time, and the unchanged fetch returned full figures at 06:34. Why is not
+known; one day's observation is all there is. To start early and let the fetch keep trying every 5 minutes:
 
 ```bash
 python bots/gex_snapshot.py --zero-dte-only --wait 240

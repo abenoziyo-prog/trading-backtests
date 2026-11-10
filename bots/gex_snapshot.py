@@ -143,9 +143,9 @@ def oi_missing(zrows: list[dict]) -> bool:
 def describe(z: dict) -> str:
     """One 0DTE row as a few readable lines for the terminal."""
     if not z.get("error") and not z.get("contracts") and z.get("listed"):
-        return (f"{z['symbol']}: Schwab lists {z['listed']} contracts for {z['expiry']} but its API reports open interest 0 "
-                "on all of them. The API leaves that field empty for every expiry early in the day, although Schwab's own "
-                "screens show it. Run again later, or use --wait to keep trying.")
+        return (f"{z['symbol']}: Schwab lists {z['listed']} contracts for {z['expiry']} but reports open interest 0 on all of "
+                "them. On 2026-11-10 that was the case until about 06:30 New York time and the same request worked at "
+                "06:34. Run again in a few minutes, or use --wait to keep trying.")
     if z.get("error") or not z.get("contracts"):
         return f"{z['symbol']}: no 0DTE data ({z.get('error') or 'no live expiry with open interest'})"
 

@@ -91,7 +91,7 @@ class Session:
                  expiry=z.get("expiry"), spot=_f(spot), indexQuote=_f(index_quote), basis=_f(basis), ratio=_f(ratio, 5), basisNote=basis_note,
                  future=self.future, index=self.index, thin=bool((z.get("call_oi") or 0) + (z.get("put_oi") or 0) < THIN_OI),
                  futLast=_f(fut_last), flip=_f(z.get("gamma_flip")), callWall=_f(z.get("call_wall")),
-                 putWall=_f(z.get("put_wall")), peak=_f(z.get("gamma_peak")), net=_f(z.get("net_gex"), 0), regime=z.get("regime"),
+                 putWall=_f(z.get("put_wall")), net=_f(z.get("net_gex"), 0), regime=z.get("regime"),
                  callOi=int(z.get("call_oi") or 0), putOi=int(z.get("put_oi") or 0),
                  callVol=int(table.call_volume.sum()), putVol=int(table.put_volume.sum()),
                  topCall=z.get("top_call_oi") or "", topPut=z.get("top_put_oi") or "",

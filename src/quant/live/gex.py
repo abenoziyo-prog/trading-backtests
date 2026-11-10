@@ -148,8 +148,7 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
     """Dealer gamma and open interest of the nearest live expiry only (same-day before the close).
       net_gex / regime      as in summary(), on this expiry alone: "positive" or "negative"
       gamma_flip            where this expiry's net GEX crosses zero (nearest crossing to spot), if any
-      call_wall / put_wall  largest call GEX strike above the price / largest put GEX strike below it; gamma_peak: the
-                            strike with the most gamma of both sides together (see walls)
+      call_wall / put_wall  strike with the largest call GEX / the largest (negative) put GEX
       max_call_oi_strike, max_put_oi_strike, max_call_oi, max_put_oi   the largest open-interest strike per side
       top_call_oi / top_put_oi   the `top` largest strikes per side as "strike:open interest" joined by "|"
     Open interest is the previous close's figure: positions opened today are not in it."""
@@ -191,25 +190,9 @@ def zero_dte(c: pd.DataFrame, spot: float, asof: datetime, symbol: str, top: int
                regime="positive" if net > 0 else "negative",
                gamma_flip=round(float(flip), 2) if np.isfinite(flip) else None,
                spot_vs_flip_pct=round(100 * (spot / flip - 1), 2) if np.isfinite(flip) else None,
-               **walls(calls, puts, spot))
+               call_wall=float(calls.idxmax()) if len(calls) and calls.max() > 0 else None,
+               put_wall=float(puts.idxmin()) if len(puts) and puts.min() < 0 else None)
     return out
-
-
-def walls(calls: pd.Series, puts: pd.Series, spot: float) -> dict:
-    """call_wall: the strike above the price with the largest call GEX. put_wall: the strike below the price with the
-    largest (negative) put GEX. gamma_peak: the strike with the most gamma, calls and puts together.
-    The strike nearest the price belongs to neither wall. Gamma is highest at the money and, in the last hours of an
-    expiry, almost all of it sits there, so the largest strike of both sides is then that one strike: it says where the
-    price is, not where a level waits. It is reported as gamma_peak instead."""
-    strikes = calls.index.union(puts.index)
-    if not len(strikes):
-        return dict(call_wall=None, put_wall=None, gamma_peak=None)
-    here = float(strikes[np.argmin(np.abs(strikes.to_numpy(dtype=float) - spot))])
-    up, down = calls[calls.index > here], puts[puts.index < here]
-    gross = calls.reindex(strikes, fill_value=0.0).abs() + puts.reindex(strikes, fill_value=0.0).abs()
-    return dict(call_wall=float(up.idxmax()) if len(up) and up.max() > 0 else None,
-                put_wall=float(down.idxmin()) if len(down) and down.min() < 0 else None,
-                gamma_peak=float(gross.idxmax()) if gross.max() > 0 else None)
 
 
 def spot_of(chain: dict) -> float | None:

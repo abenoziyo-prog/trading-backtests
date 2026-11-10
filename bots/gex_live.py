@@ -21,7 +21,8 @@ is dropped. While the access token is within two minutes of its renewal, request
 
 In cash hours (09:30-16:00 New York) the chain's own index price is live, so the /ES price is not asked for at every
 snapshot: it is index + basis, and the real /ES price is asked for every BASIS_EVERY seconds to renew the basis. A
-snapshot then costs one request and the budget gives one about every 0.58 seconds. If the basis jumps by more than
+snapshot then costs one request and the budget gives one about every 0.58 seconds. The levels are moved onto /ES
+with the median of the last BASIS_KEEP basis readings, because one reading is noisy by a point or more. If the basis jumps by more than
 BASIS_JUMP points between two checks the index price is taken as not live and the loop goes back to asking every time.
 --price-every-snapshot turns this off.
 
@@ -78,6 +79,7 @@ ETFS = ("SPY",)
 MAX_FLIGHT = 4       # snapshots whose answers may be awaited at the same time
 BASIS_JUMP = 5.0     # points: a larger change of the basis between two checks means the index price is not live
 BASIS_EVERY = 10.0   # seconds between requests for the future's price while it is derived from the live index price
+BASIS_KEEP = 60      # basis readings the levels' basis is the median of (60 x BASIS_EVERY = 10 minutes)
 RECOVER_S = 120.0    # seconds without a 429 before the loop takes back one step of a slowdown
 PRINT_EVERY = 15     # seconds between status lines in the terminal (--verbose prints every cycle)
 
@@ -240,6 +242,16 @@ def ease(brake: float, quiet_s: float) -> float:
     return max(1.0, brake / 1.5) if brake > 1.0 and quiet_s >= RECOVER_S else brake
 
 
+def steady_basis(seen: list, reading: float) -> float:
+    """The basis the levels are moved onto the future with: the median of the last BASIS_KEEP readings, `reading`
+    included (`seen` is updated in place). One reading is the future's price minus an index price that are not taken
+    at the same instant, so it jumps by a point or more from one check to the next while the true basis hardly
+    changes within a day. Used raw, it would shift the flip and both walls on the future by that noise every check."""
+    seen.append(float(reading))
+    del seen[:-BASIS_KEEP]
+    return round(float(pd.Series(seen).median()), 2)
+
+
 def requests_per_cycle(states: list[dict]) -> int:
     """One for the future's price, one per chain (two for a chain that has to be asked for as calls and puts)."""
     return 1 + sum(2 if st.get("split") else 1 for st in states)
@@ -400,12 +412,15 @@ def main() -> None:
                     elif px is not None and imp and ctl["index"] and cash_open(r["now"]):   # a real price: renew the basis
                         st = runs[imp[1]][1]
                         basis = round(px[0] - r["chains"][imp[1]][1], 2)
-                        if "live_basis" in st and abs(basis - st["live_basis"]) > BASIS_JUMP:
+                        seen = st.setdefault("basis_seen", [])
+                        if seen and abs(basis - st["basis"]) > BASIS_JUMP:
                             ctl["index"] = False   # the index price in the chain does not follow the market: do not rely on it
-                            print(f"{r['now']:%H:%M:%S}  the basis moved {basis - st['live_basis']:+.2f} points in {BASIS_EVERY:.0f} seconds, so the "
+                            print(f"{r['now']:%H:%M:%S}  the basis read {basis - st['basis']:+.2f} points away from its usual value, so the "
                                   f"index price in the chain is not live: asking for the {future} price at every snapshot from now on", flush=True)
-                        st["basis"] = st["live_basis"] = basis
-                        st["note"] = f"live at {r['now']:%H:%M:%S} New York; between checks {future} is the index plus this basis"
+                        st["live_basis"] = basis
+                        st["basis"] = steady_basis(seen, basis)
+                        st["note"] = (f"middle of the last {len(seen)} checks, one every {BASIS_EVERY:.0f} seconds; "
+                                      f"between checks {future} is the index plus this basis")
                     for sym, chain in r["chains"].items():
                         ses, state = runs[sym]
                         ses.every_s = every

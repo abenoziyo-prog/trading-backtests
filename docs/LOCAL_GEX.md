@@ -148,6 +148,9 @@ Things to know:
 - On the wall tiles the brackets show how far the wall is from the future's last price (a wall is a fixed strike, so
   its change between two snapshots is almost always 0). On the other tiles they show the change since the previous
   snapshot.
+- In cash hours the flip and the walls are moved onto /ES with the median of the last 60 basis readings (ten
+  minutes). A single reading is noisy by a point or more, because the /ES price and the index price are not taken at
+  the same instant; used raw it shifted every level on /ES by the same amount at each check.
 - SPY gamma covers the SPY chain alone. It is a separate position from the SPX chain, with its own walls and flip:
   read each map on its own, and compare where the levels of the two sources agree.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the

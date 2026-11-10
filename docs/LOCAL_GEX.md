@@ -145,6 +145,9 @@ Things to know:
   gamma: late in an expiry almost all gamma sits on the strike at the price, so walls ranked by gamma follow the
   price and end on the same strike. Open interest is the previous close's figure, so positions opened today are not
   in the walls.
+- On the wall tiles the brackets show how far the wall is from the future's last price (a wall is a fixed strike, so
+  its change between two snapshots is almost always 0). On the other tiles they show the change since the previous
+  snapshot.
 - SPY gamma covers the SPY chain alone. It is a separate position from the SPX chain, with its own walls and flip:
   read each map on its own, and compare where the levels of the two sources agree.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the

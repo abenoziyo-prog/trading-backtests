@@ -121,6 +121,13 @@ Things to know:
   Schwab app at the same time: the limit is shared.
 - Requests overlap. A new request goes out on schedule while earlier answers are still on their way (at most four),
   so one slow answer does not delay the next snapshot. An answer that arrives after a newer one is dropped.
+- In cash hours (09:30 to 16:00 New York) the SPX price inside each chain answer is live, so the loop stops asking
+  for the `/ES` price at every snapshot. `/ES` is then SPX plus the basis, and the real `/ES` price is asked for every
+  10 seconds to renew the basis. A snapshot costs one request, which gives one about every 0.58 seconds. The terminal
+  says when this starts. If the basis jumps by more than 5 points between two checks, the index price is taken as
+  not live and the loop goes back to asking every time. `--price-every-snapshot` turns this off.
+- `--stream` needs Schwab's Trader API (`userPreference`), which an app with only "Market Data Production" does not
+  have: the stream then fails with 401 Unauthorized and the loop carries on without it.
 - `--stream` takes the `/ES` price from Schwab's quote stream instead of asking for it at every snapshot. The price
   is then the last trade at the moment the chain arrives, and a snapshot costs one request instead of two, so the
   same budget gives one every 0.55 seconds. The terminal says when the price comes from the stream and when the loop

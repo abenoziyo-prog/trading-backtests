@@ -18,6 +18,12 @@ Requests do not wait for one another: a new one goes out on schedule while earli
 most MAX_FLIGHT at a time), so a slow answer does not delay the next snapshot. An answer that arrives after a newer one
 is dropped. While the access token is within two minutes of its renewal, requests go one at a time.
 
+In cash hours (09:30-16:00 New York) the chain's own index price is live, so the /ES price is not asked for at every
+snapshot: it is index + basis, and the real /ES price is asked for every BASIS_EVERY seconds to renew the basis. A
+snapshot then costs one request and the budget gives one about every 0.58 seconds. If the basis jumps by more than
+BASIS_JUMP points between two checks the index price is taken as not live and the loop goes back to asking every time.
+--price-every-snapshot turns this off.
+
 --stream takes the /ES price from Schwab's quote stream instead of asking for it: the price is then the last trade at
 the moment a chain arrives, and a snapshot costs one request, so the same budget gives one every 0.55 seconds. While
 the stream is not connected the loop asks for the price as before. Schwab may allow one stream per login: do not use
@@ -59,7 +65,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "bots"))
 
 import gex_snapshot as snap  # noqa: E402
-from quant.live.gex import futures_levels, strike_table, zero_dte  # noqa: E402
+from quant.live.gex import cash_open, futures_levels, strike_table, zero_dte  # noqa: E402
 from quant.live.gex_map import Session, page_name, write, write_frame  # noqa: E402
 from quant.live.schwab_feed import LivePrice, ReadOnlyClient, history_bars, make_client, run_price_stream  # noqa: E402
 
@@ -69,6 +75,8 @@ DEFAULT_RATE = 110   # what the loop spends of it
 SOURCES = {"$SPX": "/ES", "SPY": "/ES"}  # option chain -> the future its levels are read on
 ETFS = ("SPY",)
 MAX_FLIGHT = 4       # snapshots whose answers may be awaited at the same time
+BASIS_JUMP = 5.0     # points: a larger change of the basis between two checks means the index price is not live
+BASIS_EVERY = 10.0   # seconds between requests for the future's price while it is derived from the live index price
 PRINT_EVERY = 15     # seconds between status lines in the terminal (--verbose prints every cycle)
 
 
@@ -228,14 +236,40 @@ def requests_per_cycle(states: list[dict]) -> int:
     return 1 + sum(2 if st.get("split") else 1 for st in states)
 
 
-def grab(client: ReadOnlyClient, runs: dict, future: str, now: datetime, out: Path, pool, live: LivePrice | None) -> dict:
+def index_symbol(runs: dict) -> str | None:
+    """The index among the symbols of the run (its chain carries the live index price in cash hours), if any."""
+    return next((sym for sym in runs if sym not in ETFS), None)
+
+
+def implied_price(runs: dict, chains: dict) -> tuple[float, str] | None:
+    """The future's price implied by the index price of a chain answer: index + the run's basis. None before the
+    basis is known or without an index chain."""
+    sym = index_symbol(runs)
+    if sym is None or sym not in chains or "basis" not in runs[sym][1]:
+        return None
+    return chains[sym][1] + runs[sym][1]["basis"], sym
+
+
+def grab(client: ReadOnlyClient, runs: dict, future: str, now: datetime, out: Path, pool, live: LivePrice | None,
+         ctl: dict | None = None) -> dict:
     """The network part of one snapshot, run in a worker thread: the future's price (from the stream when it is
-    connected, else one request) and every symbol's chain. Returns dict(now, px, chains, errors, fetch_s)."""
+    connected, else one request) and every symbol's chain. Returns dict(now, px, chains, errors, fetch_s, asked).
+    With ctl["index"] set and the cash market open, the price is asked for only every BASIS_EVERY seconds (asked=True);
+    in between px is None and the caller derives it from the chain's index price (implied_price)."""
     t0, errors, px = time.monotonic(), [], None
     p = live.get() if live else None
     px_job = None
+    ctl = ctl if ctl is not None else {}
+    sym = index_symbol(runs)
+    skip = bool(p is None and ctl.get("index") and sym and cash_open(now) and "basis" in runs[sym][1]
+                and t0 - ctl.get("px_at", -1e9) < BASIS_EVERY)
+    asked = p is None and not skip
+    if asked:
+        ctl["px_at"] = t0
     if p is not None:
         px = (p, now)
+    elif skip:
+        pass
     elif token_fresh(client):
         px_job = pool.submit(last_price, client, future, now)
     else:   # a token close to its renewal: alone and first, so the renewal happens in this one request
@@ -255,7 +289,7 @@ def grab(client: ReadOnlyClient, runs: dict, future: str, now: datetime, out: Pa
             chains[sym] = job.result()
         except Exception as exc:  # one bad answer must not end the run or the other symbol
             errors.append(f"{sym} chain: {repr(exc)[:160]}")
-    return dict(now=now, px=px, chains=chains, errors=errors, fetch_s=time.monotonic() - t0, polled=p is None)
+    return dict(now=now, px=px, chains=chains, errors=errors, fetch_s=time.monotonic() - t0, asked=asked)
 
 
 def stream_status(on: bool, live: LivePrice) -> str:
@@ -275,6 +309,9 @@ def main() -> None:
     ap.add_argument("--every", type=float, default=0.0, help="seconds between snapshots; 0 (default) = as fast as --rate allows")
     ap.add_argument("--stream", action="store_true",
                     help="take the future's price from Schwab's quote stream instead of one request per snapshot")
+    ap.add_argument("--price-every-snapshot", action="store_true",
+                    help="ask for the future's price at every snapshot also in cash hours (default then: every 10 seconds, "
+                         "with the live index price from the chain in between)")
     ap.add_argument("--until", default="16:15", help="New York time to stop at (HH:MM)")
     ap.add_argument("--open", action="store_true", help="open the page in the browser after the first snapshot")
     ap.add_argument("--verbose", action="store_true", help="print every cycle (default: a status line every 15 seconds)")
@@ -287,6 +324,7 @@ def main() -> None:
                          extra=ReadOnlyClient.MARKET_DATA)
     future = SOURCES[symbols[0]]
     live, stop = (LivePrice() if a.stream else None), threading.Event()
+    ctl = dict(index=not a.price_every_snapshot, px_at=-1e9)
     if live is not None:
         threading.Thread(target=run_price_stream, args=(client, future, live, stop), daemon=True).start()
     runs = {sym: (Session(SOURCES[sym], 1.0, index=sym.strip("$")), {}) for sym in symbols}
@@ -294,8 +332,14 @@ def main() -> None:
     def states() -> list[dict]:
         return [st for _, st in runs.values()]
 
-    def pace(brake: float, streamed: bool) -> float:   # the stream saves the price request of every snapshot
-        return min(60.0, brake * interval(requests_per_cycle(states()) - (1 if streamed else 0), a.rate, a.every))
+    def from_index() -> bool:   # the future's price comes from the chain's live index price, checked every BASIS_EVERY
+        sym = index_symbol(runs)
+        return bool(ctl["index"] and sym and cash_open(datetime.now(NY)) and "basis" in runs[sym][1])
+
+    def pace(brake: float, streamed: bool) -> float:   # the stream, or the index price, saves the price request of a snapshot
+        free = streamed or from_index()
+        rate = a.rate - (60.0 / BASIS_EVERY if from_index() and not streamed else 0.0)
+        return min(60.0, brake * interval(requests_per_cycle(states()) - (1 if free else 0), rate, a.every))
 
     every = pace(1.0, False)
     page = snap.OUT / "live" / "live_map.html"
@@ -304,7 +348,7 @@ def main() -> None:
     print(f"Live maps: {page}\nA snapshot every {every:.1f} seconds"
           + (f", {interval(len(symbols), a.rate, a.every):.2f} once the {future} price stream is connected" if live else "")
           + ". Open the page once, it updates in place. Ctrl-C stops.\n", flush=True)
-    opened, printed, brake, done_at, streaming, stream_err, n_done = False, 0.0, 1.0, None, None, None, 0
+    opened, printed, brake, done_at, streaming, stream_err, n_done, by_index = False, 0.0, 1.0, None, None, None, 0, False
     pending: list = []
     next_at = time.monotonic()
     try:
@@ -319,7 +363,7 @@ def main() -> None:
                 ready = all("basis" in st for st in states())
                 room = len(pending) < (MAX_FLIGHT if ready and token_fresh(client) else 1)
                 if room and time.monotonic() >= next_at:
-                    pending.append(outer.submit(grab, client, runs, future, now, snap.OUT, inner, live))
+                    pending.append(outer.submit(grab, client, runs, future, now, snap.OUT, inner, live, ctl))
                     next_at = max(next_at + every, time.monotonic())   # late once does not mean a burst afterwards
                 pause = max(0.0, min(next_at - time.monotonic(), 0.25))
                 if pending:   # until the next request is due; with no room left, until an answer arrives
@@ -341,6 +385,18 @@ def main() -> None:
                     done_at = r["now"]
                     p = live.get() if live else None
                     px = (p, datetime.now(NY)) if p is not None else r["px"]
+                    imp = implied_price(runs, r["chains"])
+                    if px is None and not r["asked"] and imp:      # between two price checks: index price + basis
+                        px = (round(imp[0], 2), r["now"])
+                    elif px is not None and imp and ctl["index"] and cash_open(r["now"]):   # a real price: renew the basis
+                        st = runs[imp[1]][1]
+                        basis = round(px[0] - r["chains"][imp[1]][1], 2)
+                        if "live_basis" in st and abs(basis - st["live_basis"]) > BASIS_JUMP:
+                            ctl["index"] = False   # the index price in the chain does not follow the market: do not rely on it
+                            print(f"{r['now']:%H:%M:%S}  the basis moved {basis - st['live_basis']:+.2f} points in {BASIS_EVERY:.0f} seconds, so the "
+                                  f"index price in the chain is not live: asking for the {future} price at every snapshot from now on", flush=True)
+                        st["basis"] = st["live_basis"] = basis
+                        st["note"] = f"live at {r['now']:%H:%M:%S} New York; between checks {future} is the index plus this basis"
                     for sym, chain in r["chains"].items():
                         ses, state = runs[sym]
                         ses.every_s = every
@@ -368,6 +424,10 @@ def main() -> None:
                     stream_err = live.error
                     print(f"{datetime.now(NY):%H:%M:%S}  {future} price: " + stream_status(on, live), flush=True)
                     streaming = on
+                if from_index() != by_index and not on:
+                    by_index = from_index()
+                    print(f"{datetime.now(NY):%H:%M:%S}  {future} price: " + (f"from the live index price in the chain, checked against {future} every {BASIS_EVERY:.0f} seconds"
+                                                                             if by_index else "one request per snapshot"), flush=True)
                 every = pace(brake, on)
     except KeyboardInterrupt:
         print("\nStopped.")

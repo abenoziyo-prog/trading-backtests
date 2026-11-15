@@ -22,7 +22,9 @@ is dropped. While the access token is within two minutes of its renewal, request
 In cash hours (09:30-16:00 New York) the chain's own index price is live, so the /ES price is not asked for at every
 snapshot: it is index + basis, and the real /ES price is asked for every BASIS_EVERY seconds to renew the basis. A
 snapshot then costs one request and the budget gives one about every 0.58 seconds. The levels are moved onto /ES
-with the median of the last BASIS_KEEP basis readings, because one reading is noisy by a point or more. If the basis jumps by more than
+with the median of the last BASIS_KEEP basis readings, because one reading is noisy by a point or more. The Greeks
+are computed at the chain's index price at every snapshot, also at the ones where the real /ES price was asked for:
+/ES minus the median basis is off by that reading's noise. If the basis jumps by more than
 BASIS_JUMP points between two checks the index price is taken as not live and the loop goes back to asking every time.
 --price-every-snapshot turns this off.
 
@@ -35,7 +37,8 @@ Each cycle:
   1. the latest /ES price (the newest 1-minute candle, including the minute still forming)
   2. the nearest-expiry chains with every strike; one snapshot a minute is kept under
      data/schwab/gex/<SYMBOL>_0DTE/live/<date>/
-  3. the Greeks at the price implied by /ES (index: /ES minus the basis; SPY: /ES divided by the price ratio), then
+  3. the Greeks at the price implied by /ES (index: /ES minus the basis, or the chain's own index price while that
+     is live in cash hours; SPY: /ES divided by the price ratio), then
      data/schwab/gex/live/es_map.html (es_spy_map.html) plus its data file (quant.live.gex_map): levels on /ES,
      gamma / vanna / charm per strike, and what changed against the previous snapshot, five minutes ago and the start
   4. one row per symbol is appended to data/schwab/gex/gex_live.csv
@@ -158,9 +161,11 @@ def fetch(client: ReadOnlyClient, symbol: str, now: datetime, state: dict, out: 
 
 
 def cycle(client: ReadOnlyClient, ses: Session, symbol: str, now: datetime, state: dict, out: Path, chain=None, px=None,
-          fetch_s: float | None = None) -> dict:
+          fetch_s: float | None = None, spot: float | None = None) -> dict:
     """One snapshot and one page. `state` carries the expiry day, the basis and the last known future price between
-    cycles. `chain` (fetch()'s result) and `px` (last_price()'s) are fetched here when the caller did not."""
+    cycles. `chain` (fetch()'s result) and `px` (last_price()'s) are fetched here when the caller did not. `spot` is
+    the price the Greeks are computed at when the caller knows it (chain_spot()); otherwise the future's price minus
+    the basis."""
     t0 = time.monotonic()
     c, index_quote = chain or fetch(client, symbol, now, state, out)
     if "basis" not in state:
@@ -177,7 +182,8 @@ def cycle(client: ReadOnlyClient, ses: Session, symbol: str, now: datetime, stat
         raise ValueError(f"no {ses.future} price")
     if fetch_s is None:
         fetch_s = time.monotonic() - t0
-    spot = (state["fut"] - state["basis"]) / state["ratio"]
+    if spot is None:
+        spot = (state["fut"] - state["basis"]) / state["ratio"]
     z = zero_dte(c, spot, now, symbol)
     data = ses.add(now, z, strike_table(c, spot, now), state["fut"], state["basis"], state["note"], index_quote, fetch_s,
                    state["ratio"])
@@ -260,6 +266,14 @@ def requests_per_cycle(states: list[dict]) -> int:
 def index_symbol(runs: dict) -> str | None:
     """The index among the symbols of the run (its chain carries the live index price in cash hours), if any."""
     return next((sym for sym in runs if sym not in ETFS), None)
+
+
+def chain_spot(sym: str, imp, index_live: bool, chain) -> float | None:
+    """The price the Greeks of `sym` are computed at while the index price in its chain is live: that index price,
+    at every snapshot. None otherwise, and cycle() takes the future's price minus the basis. `imp` is
+    implied_price()'s result. The real future price minus the median basis is not used here: it differs from the
+    index by the noise of that one basis reading (up to a point), which moved net gamma at every price check."""
+    return float(chain[1]) if index_live and imp and sym == imp[1] and chain[1] is not None else None
 
 
 def implied_price(runs: dict, chains: dict) -> tuple[float, str] | None:
@@ -425,7 +439,8 @@ def main() -> None:
                         ses, state = runs[sym]
                         ses.every_s = every
                         try:
-                            lines.append(line(cycle(client, ses, sym, r["now"], state, snap.OUT, chain, px, r["fetch_s"])))
+                            at = chain_spot(sym, imp, bool(ctl["index"] and cash_open(r["now"])), chain)
+                            lines.append(line(cycle(client, ses, sym, r["now"], state, snap.OUT, chain, px, r["fetch_s"], at)))
                         except Exception as exc:
                             errors.append(f"{sym}: {repr(exc)[:160]}")
                     n_done += 1 if lines else 0

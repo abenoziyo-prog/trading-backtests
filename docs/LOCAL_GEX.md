@@ -151,6 +151,9 @@ Things to know:
 - In cash hours the flip and the walls are moved onto /ES with the median of the last 60 basis readings (ten
   minutes). A single reading is noisy by a point or more, because the /ES price and the index price are not taken at
   the same instant; used raw it shifted every level on /ES by the same amount at each check.
+- In cash hours the Greeks are computed at the index price that comes with the chain, at every snapshot. At the
+  snapshots where the real /ES price is asked for (one every 10 seconds) they were computed at /ES minus the median
+  basis until 15 November 2026, which is off by up to a point and made net gamma jump at each check.
 - SPY gamma covers the SPY chain alone. It is a separate position from the SPX chain, with its own walls and flip:
   read each map on its own, and compare where the levels of the two sources agree.
 - The Greeks are computed at the index price implied by `/ES` (last price minus the basis), so the map moves with the

@@ -490,6 +490,17 @@ def test_live_cycle_uses_three_read_only_requests_and_writes_the_page(tmp_path):
     write_frame(tmp_path / "live" / "live_map.html", [("/ES", "SPX"), ("/ES", "SPY")])
     frame = (tmp_path / "live" / "live_map.html").read_text(encoding="utf-8")
     assert frame.index("es_map.html") < frame.index("es_spy_map.html")
+    # while the chain's index price is live the Greeks are computed at it, also when the real future price is known:
+    # the future's price minus the median basis is off by the noise of one basis reading
+    assert d3["M"]["spot"] == 7733.0                                     # 7771 - the basis of 38
+    imp = (chain3[1] + state["basis"], "$SPX")
+    assert live.chain_spot("$SPX", imp, True, chain3) == chain3[1]
+    assert live.chain_spot("$SPX", imp, False, chain3) is None and live.chain_spot("SPY", imp, True, chain3) is None
+    assert live.chain_spot("$SPX", None, True, chain3) is None
+    t5 = t3 + timedelta(seconds=1)
+    d5 = live.cycle(client, ses, "$SPX", t5, state, tmp_path, chain3, (7771.9, t5), 0.4, live.chain_spot("$SPX", imp, True, chain3))
+    assert d5["M"]["spot"] == chain3[1] and d5["M"]["futLast"] == 7771.9 and state["basis"] == 38.0
+    assert len(pd.read_csv(tmp_path / "gex_live.csv")) == 4
 
 
 def test_live_session_keeps_a_long_fast_run_small():

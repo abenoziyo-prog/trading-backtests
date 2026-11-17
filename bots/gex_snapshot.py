@@ -148,7 +148,7 @@ def add_futures(client: ReadOnlyClient, z: dict, now: datetime) -> dict:
 
 
 def append_csv(p: Path, log: pd.DataFrame) -> None:
-    old = pd.read_csv(p) if p.exists() else None
+    old = pd.read_csv(p, low_memory=False) if p.exists() else None
     pd.concat([old, log], ignore_index=True).to_csv(p, index=False) if old is not None else log.to_csv(p, index=False)
 
 

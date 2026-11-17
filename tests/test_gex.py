@@ -615,3 +615,22 @@ def test_the_levels_basis_is_the_median_of_the_recent_readings():
 def test_the_wall_size_is_among_the_values_shown_with_their_change():
     from quant.live.gex_map import DELTA_KEYS
     assert {"cwSize", "pwSize"} <= set(DELTA_KEYS)
+
+
+def test_append_row_keeps_the_file_order_and_does_not_rewrite_it(tmp_path, monkeypatch):
+    import csv as _csv
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("gex_live", Path(__file__).resolve().parents[1] / "bots/gex_live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+    p = tmp_path / "gex_live.csv"
+    p.write_text("asof,symbol,regime,net,ratio\n1,$SPX,long,5,1.0\n", encoding="utf-8")
+    rewrites = []
+    monkeypatch.setattr(live.snap, "append_csv", lambda *a: rewrites.append(a))
+    live.append_row(p, dict(asof=2, symbol="$SPX", ratio=1.0, regime=None, net=6))   # same columns, other order
+    assert rewrites == []
+    rows = list(_csv.reader(p.open(encoding="utf-8")))
+    assert rows[0] == ["asof", "symbol", "regime", "net", "ratio"] and rows[-1] == ["2", "$SPX", "", "6", "1.0"]
+    live.append_row(p, dict(asof=3, symbol="$SPX", ratio=1.0, regime="short", net=7, extra=1))   # a new column
+    assert len(rewrites) == 1

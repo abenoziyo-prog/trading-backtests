@@ -201,19 +201,23 @@ def cycle(client: ReadOnlyClient, ses: Session, symbol: str, now: datetime, stat
 
 
 def append_row(path: Path, row: dict) -> None:
-    """Add one line to the CSV without reading it back (the file grows by thousands of rows a session). A file whose
-    columns differ, from an older version, is rewritten once with the union of the columns."""
+    """Add one line to the CSV without reading it back (the file grows by thousands of rows a session). The line is
+    written in the file's own column order. Only a file that lacks one of the row's columns, from an older version,
+    is rewritten, once, with the union of the columns. (Comparing the column order instead rewrote the whole file at
+    every snapshot once the union had put a new column at the end.)"""
+    header = None
     if path.exists():
         with path.open(encoding="utf-8", newline="") as f:
             header = next(csv.reader(f), None)
-        if header != list(row):
+        if header and not set(row) <= set(header):
             snap.append_csv(path, pd.DataFrame([row]))
             return
+    cols = header or list(row)
     with path.open("a", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         if f.tell() == 0:
-            w.writerow(list(row))
-        w.writerow(["" if v is None else v for v in row.values()])
+            w.writerow(cols)
+        w.writerow(["" if row.get(k) is None else row[k] for k in cols])
 
 
 def line(data: dict) -> str:

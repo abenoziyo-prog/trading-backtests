@@ -634,3 +634,52 @@ def test_append_row_keeps_the_file_order_and_does_not_rewrite_it(tmp_path, monke
     assert rows[0] == ["asof", "symbol", "regime", "net", "ratio"] and rows[-1] == ["2", "$SPX", "", "6", "1.0"]
     live.append_row(p, dict(asof=3, symbol="$SPX", ratio=1.0, regime="short", net=7, extra=1))   # a new column
     assert len(rewrites) == 1
+
+
+def test_previous_open_interest_fills_the_morning_before_it_is_published(tmp_path, monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("gex_live", Path(__file__).resolve().parents[1] / "bots/gex_live.py")
+    live = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(live)
+
+    import pandas as pd
+
+    def chain(expiry, oi):
+        rows = [dict(put_call=s, expiry=expiry, dte=0, strike=k, open_interest=oi * (1 + i), volume=10.0, iv=15.0,
+                     gamma_schwab=0.01, delta=0.5, bid=1.0, ask=1.1, mark=1.05, multiplier=100.0)
+                for i, k in enumerate((7400.0, 7425.0, 7450.0)) for s in ("CALL", "PUT")]
+        return pd.DataFrame(rows)
+
+    # yesterday after 16:00 the map moved on to today's expiry, which then carried open interest
+    day = live.snap.NY
+    old = tmp_path / "SPX_IDX_0DTE" / "live" / "2026-11-18"
+    old.mkdir(parents=True)
+    chain("2026-11-19", 0.0).assign(asof="2026-11-18T15:59:58-05:00").to_parquet(old / "2026-11-18_1559.parquet")
+    chain("2026-11-19", 100.0).assign(asof="2026-11-18T16:14:01-05:00").to_parquet(old / "2026-11-18_1614.parquet")
+    now = datetime(2026, 11, 19, 5, 59, tzinfo=day)
+    saved = live.find_oi(tmp_path, "$SPX", "2026-11-19", now)
+    assert saved is not None and saved.open_interest.sum() == 2 * (100 + 200 + 300)
+    today = chain("2026-11-19", 0.0)
+    filled = live.with_prior_oi(today, saved)
+    assert list(filled.columns) == list(today.columns) and filled.open_interest.sum() == 1200
+    assert filled.volume.equals(today.volume)                                   # live volume is kept
+    assert live.with_prior_oi(chain("2026-11-19", 5.0), saved).open_interest.sum() == 5 * 12   # a live figure wins
+    assert "06:30" in live.oi_note(saved) and "Wed 18 Nov 16:14" in live.oi_note(saved)
+
+    # prior_oi: before 06:30 the saved figure and a note; once Schwab has it, it is kept for tomorrow and no note
+    state, calls = {}, []
+    monkeypatch.setattr(live, "save_next_oi", lambda *a: calls.append(a) or "2026-11-20")
+    c, note = live.prior_oi(None, "$SPX", now, state, tmp_path, today)
+    assert c.open_interest.sum() == 1200 and note and "previous publication" in note
+    t2 = datetime(2026, 11, 19, 6, 31, tzinfo=day)
+    c2, note2 = live.prior_oi(None, "$SPX", t2, state, tmp_path, chain("2026-11-19", 7.0))
+    assert note2 is None and c2.open_interest.sum() == 7 * 12 and calls == []   # not cash hours: no next-expiry request
+    assert live.oi_file(tmp_path, "$SPX", "2026-11-19").exists()
+    t3 = datetime(2026, 11, 19, 10, 0, tzinfo=day)
+    live.prior_oi(None, "$SPX", t3, state, tmp_path, chain("2026-11-19", 7.0))
+    live.prior_oi(None, "$SPX", t3, state, tmp_path, chain("2026-11-19", 7.0))
+    assert len(calls) == 1                                                      # once a day
+    # a new run the next morning reads the oi/ file first
+    assert live.find_oi(tmp_path, "$SPX", "2026-11-19", now).open_interest.sum() == 7 * 12
+    assert live.find_oi(tmp_path, "$SPX", "2026-11-21", now) is None

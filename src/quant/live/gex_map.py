@@ -50,7 +50,7 @@ class Session:
         return old[-1] if old else None
 
     def add(self, now: datetime, z: dict, table: pd.DataFrame, fut_last: float, basis: float, basis_note: str,
-            index_quote: float | None = None, fetch_s: float | None = None, ratio: float = 1.0) -> dict:
+            index_quote: float | None = None, fetch_s: float | None = None, ratio: float = 1.0, oi_note: str | None = None) -> dict:
         """Register one snapshot (z = zero_dte row and table = strike_table, both computed at the index price
         (fut_last - basis) / ratio) and return the data the page shows. A level on the future is level * ratio + basis:
         an index uses ratio 1 and its basis, an ETF (SPY, QQQ) basis 0 and the price ratio future / ETF."""
@@ -89,7 +89,7 @@ class Session:
         hist = self.hist[::-1][::step][::-1]
         m = dict(asof=now.isoformat(timespec="seconds"), clock=now.strftime("%H:%M:%S"), day=now.strftime("%a %d %b %Y"),
                  expiry=z.get("expiry"), spot=_f(spot), indexQuote=_f(index_quote), basis=_f(basis), ratio=_f(ratio, 5), basisNote=basis_note,
-                 future=self.future, index=self.index, thin=bool((z.get("call_oi") or 0) + (z.get("put_oi") or 0) < THIN_OI),
+                 oiNote=oi_note, future=self.future, index=self.index, thin=bool((z.get("call_oi") or 0) + (z.get("put_oi") or 0) < THIN_OI),
                  futLast=_f(fut_last), flip=_f(z.get("gamma_flip")), callWall=_f(z.get("call_wall")),
                  putWall=_f(z.get("put_wall")), cwSize=z.get("call_wall_size"), pwSize=z.get("put_wall_size"), net=_f(z.get("net_gex"), 0), regime=z.get("regime"),
                  callOi=int(z.get("call_oi") or 0), putOi=int(z.get("put_oi") or 0),

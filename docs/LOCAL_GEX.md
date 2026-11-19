@@ -151,6 +151,13 @@ Things to know:
 - In cash hours the flip and the walls are moved onto /ES with the median of the last 60 basis readings (ten
   minutes). A single reading is noisy by a point or more, because the /ES price and the index price are not taken at
   the same instant; used raw it shifted every level on /ES by the same amount at each check.
+- Open interest is published once a day, at about 06:30 New York, as of the previous close (OPRA; documented by
+  Databento and ThetaData). Before then Schwab's API answers 0 for every contract, so gamma, flip and walls would be
+  empty. The map keeps each expiry's open interest under `<SYMBOL>_0DTE/oi/<expiry>.parquet` (in cash hours it asks
+  once a day for the next expiry, and after 16:00 it keeps the expiry it moves on to) and uses it until 06:30, with
+  a "Yesterday's open interest" line on the page. That figure is one day older than the one published at 06:30;
+  the map switches to the new one by itself. Without a saved file it looks for one in the last five days'
+  snapshots taken after 16:00.
 - In cash hours the Greeks are computed at the index price that comes with the chain, at every snapshot. At the
   snapshots where the real /ES price is asked for (one every 10 seconds) they were computed at /ES minus the median
   basis until 15 November 2026, which is off by up to a point and made net gamma jump at each check.

@@ -143,7 +143,8 @@ status();clearInterval(tick1);tick1=setInterval(status,1000);
 $('reg').textContent=(M.regime||'unknown')+' gamma';
 $('pill').classList.toggle('neg',M.regime!=='positive');
 $('net').innerHTML=M.net==null?'n/a':(M.net>=0?'+':'\u2212')+'$'+(Math.abs(M.net)/1e9).toFixed(2)+'bn'+dk('net',1e9,'bn');
-{const o=$('thin');if(o)o.remove()}
+{const o=$('thin');if(o)o.remove()}{const o=$('oinote');if(o)o.remove()}
+if(M.oiNote){const w=document.createElement('p');w.id='oinote';w.className='sub';w.innerHTML=`<b style="color:var(--warn,#d9a03f)">Yesterday\u2019s open interest:</b> ${M.oiNote}`;$('levels').before(w)}
 if(M.thin){const w=document.createElement('p');w.id='thin';w.className='sub';w.innerHTML=`<b style="color:var(--dn)">Thin positioning:</b> only ${f0(M.callOi+M.putOi)} contracts of open interest in this expiry. Treat these levels as unreliable.`;$('levels').before(w)}
 $('regtxt').textContent=M.flip==null?'net gamma per 1% move. No flip found near price.':`net gamma per 1% move. ${F} is ${f(Math.abs(M.futLast-E(M.flip)))} points ${M.spot>=M.flip?'above':'below'} the flip.`;
 const firstOi=s=>{if(!s)return[null,null];const[k,v]=s.split('|')[0].split(':');return[+k,+v]}, tc=firstOi(M.topCall), tp=firstOi(M.topPut);

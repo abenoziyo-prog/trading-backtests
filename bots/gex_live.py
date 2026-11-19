@@ -84,6 +84,8 @@ BASIS_JUMP = 5.0     # points: a larger change of the basis between two checks m
 BASIS_EVERY = 10.0   # seconds between requests for the future's price while it is derived from the live index price
 BASIS_KEEP = 60      # basis readings the levels' basis is the median of (60 x BASIS_EVERY = 10 minutes)
 RECOVER_S = 120.0    # seconds without a 429 before the loop takes back one step of a slowdown
+OI_LOOKBACK = 5      # days of saved snapshots searched for an earlier open interest of today's expiry
+OI_PUBLISHED = "about 06:30 New York"   # when OPRA publishes the day's open interest (Databento, ThetaData docs)
 PRINT_EVERY = 15     # seconds between status lines in the terminal (--verbose prints every cycle)
 
 
@@ -160,6 +162,102 @@ def fetch(client: ReadOnlyClient, symbol: str, now: datetime, state: dict, out: 
     return c, spot
 
 
+def oi_file(out: Path, symbol: str, expiry) -> Path:
+    """Where the open interest of one expiry is kept for the next morning: <SYMBOL>_0DTE/oi/<expiry>.parquet."""
+    return out / (snap.folder(symbol) + "_0DTE") / "oi" / f"{str(expiry)[:10]}.parquet"
+
+
+def save_oi(out: Path, symbol: str, c: pd.DataFrame, now: datetime) -> bool:
+    """Keep the open interest of the chain `c` (one expiry) when it has any. Open interest is published once a day,
+    about 06:30 New York, as of the previous close, and Schwab's API answers 0 for every contract until then. The
+    contracts that expire tomorrow already carry today's figure, so saving it today gives tomorrow's map levels
+    before 06:30 (one day older than the figure published then)."""
+    if c.empty or not (c.open_interest > 0).any():
+        return False
+    keep = c.groupby(["put_call", "strike"], as_index=False).open_interest.sum().assign(asof=now.isoformat(timespec="seconds"))
+    f = oi_file(out, symbol, c.expiry.iloc[0])
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    keep.to_parquet(tmp)
+    tmp.replace(f)
+    return True
+
+
+def find_oi(out: Path, symbol: str, expiry, now: datetime) -> pd.DataFrame | None:
+    """The saved open interest of `expiry`: its oi/ file, or else the newest snapshot of an earlier day (saved after
+    that day's 16:00, when the map had moved on to this expiry) whose open interest is not 0."""
+    f = oi_file(out, symbol, expiry)
+    if f.exists():
+        return pd.read_parquet(f)
+    live = out / (snap.folder(symbol) + "_0DTE") / "live"
+    for back in range(1, OI_LOOKBACK + 1):
+        d = live / f"{now.date() - timedelta(days=back):%Y-%m-%d}"
+        for g in sorted(d.glob("*.parquet"), reverse=True) if d.exists() else []:
+            if g.stem[-4:] < "1600":
+                break   # earlier files of that day hold that day's own expiry
+            try:
+                c = pd.read_parquet(g, columns=["put_call", "expiry", "strike", "open_interest", "asof"])
+            except Exception:
+                continue
+            c = c[c.expiry.astype(str).str[:10] == str(expiry)[:10]]
+            if (c.open_interest > 0).any():
+                return c.groupby(["put_call", "strike"], as_index=False).open_interest.sum().assign(asof=str(c["asof"].iloc[0]))
+    return None
+
+
+def with_prior_oi(c: pd.DataFrame, saved: pd.DataFrame | None) -> pd.DataFrame:
+    """`c` with the saved open interest in place of Schwab's zeros, matched by side and strike."""
+    if saved is None or c.empty or (c.open_interest > 0).any():
+        return c
+    m = c.drop(columns="open_interest").merge(saved[["put_call", "strike", "open_interest"]], on=["put_call", "strike"], how="left")
+    return m.assign(open_interest=m.open_interest.fillna(0.0))[c.columns]
+
+
+def oi_note(saved: pd.DataFrame) -> str:
+    at = pd.Timestamp(saved["asof"].iloc[0])
+    return (f"Open interest from the previous publication (saved {at:%a %d %b %H:%M} New York). Schwab sends today's "
+            f"at {OI_PUBLISHED}; the map switches to it by itself.")
+
+
+def save_next_oi(client: ReadOnlyClient, symbol: str, now: datetime, out: Path) -> str | None:
+    """Once a day in cash hours: fetch the next expiry after today's (one request per day tried) and keep its open
+    interest, so that tomorrow morning's map has levels before 06:30 even if the map is stopped before 16:00."""
+    from schwab.client import Client
+    for ahead in range(1, OI_LOOKBACK + 1):
+        day = now.date() + timedelta(days=ahead)
+        if day.weekday() >= 5:
+            continue
+        c, _ = snap.fetch_side(client, symbol, day, Client.Options.ContractType.ALL)
+        if len(c):
+            return f"{day}" if save_oi(out, symbol, c, now) else None
+    return None
+
+
+def prior_oi(client: ReadOnlyClient, symbol: str, now: datetime, state: dict, out: Path, c: pd.DataFrame) -> tuple[pd.DataFrame, str | None]:
+    """Before Schwab has today's open interest: the chain with the saved one and the note the page shows. Once it
+    has it: keep it for tomorrow (this expiry once, and in cash hours the next expiry once a day)."""
+    if c.empty:
+        return c, None
+    exp = str(c.expiry.iloc[0])[:10]
+    if (c.open_interest > 0).any():
+        if state.get("oi_kept") != (exp, now.date()):
+            save_oi(out, symbol, c, now)
+            state["oi_kept"] = (exp, now.date())
+        if cash_open(now) and state.get("next_oi") != now.date():
+            state["next_oi"] = now.date()
+            try:
+                day = save_next_oi(client, symbol, now, out)
+                print(f"{now:%H:%M:%S}  {symbol}: open interest of the {day} expiry saved for tomorrow morning" if day else
+                      f"{now:%H:%M:%S}  {symbol}: no next expiry with open interest found", flush=True)
+            except Exception as exc:
+                print(f"{now:%H:%M:%S}  {symbol}: could not save the next expiry's open interest: {repr(exc)[:160]}", flush=True)
+        return c, None
+    if state.get("oi_for") != exp:
+        state["oi_for"], state["oi_saved"] = exp, find_oi(out, symbol, exp, now)
+    saved = state["oi_saved"]
+    return (with_prior_oi(c, saved), oi_note(saved)) if saved is not None else (c, None)
+
+
 def cycle(client: ReadOnlyClient, ses: Session, symbol: str, now: datetime, state: dict, out: Path, chain=None, px=None,
           fetch_s: float | None = None, spot: float | None = None) -> dict:
     """One snapshot and one page. `state` carries the expiry day, the basis and the last known future price between
@@ -184,9 +282,10 @@ def cycle(client: ReadOnlyClient, ses: Session, symbol: str, now: datetime, stat
         fetch_s = time.monotonic() - t0
     if spot is None:
         spot = (state["fut"] - state["basis"]) / state["ratio"]
+    c, note = prior_oi(client, symbol, now, state, out, c)
     z = zero_dte(c, spot, now, symbol)
     data = ses.add(now, z, strike_table(c, spot, now), state["fut"], state["basis"], state["note"], index_quote, fetch_s,
-                   state["ratio"])
+                   state["ratio"], note)
     write(out / "live" / page_name(ses.future, ses.index), data)
     m = data["M"]
     a, b = state["ratio"], state["basis"]
